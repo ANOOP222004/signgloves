@@ -29,3 +29,10 @@ FEATURE_ORDER = [
     "R_T", "R_I", "R_M", "R_R", "R_L", "R_P", "R_RL", "R_Y",
     "L_T", "L_I", "L_M", "L_R", "L_L", "L_P", "L_RL", "L_Y"
 ]
+
+# Calibration
+CALIBRATION_DIR = 'data/calibration'
+
+# Channel name lists — used by calibration and processing
+FINGER_CHANNELS = ['thumb', 'index', 'middle', 'ring', 'little']
+IMU_CHANNELS    = ['pitch', 'roll', 'yaw']
