@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 # =============================================================
 # Smart Glove Dataset Studio - main.py
-# Phase 2 Test Entry Point
+# Phase 3 Entry Point — Sensor Dashboard UI
 #
-# What this does:
-#   - Lists available serial ports
-#   - Handles all user prompts BEFORE serial thread starts
-#   - Uses countdown timer for calibration (no blocking input()
-#     while serial thread is running — prevents Queue overflow)
-#   - Starts serial thread + processing thread
-#   - Prints normalized 0.0-1.0 values to console at 30 Hz
-#   - Shuts down cleanly on Ctrl+C (no core dump)
+# Startup sequence (order is critical — do not change):
+#   1. Create QApplication        ← must exist before any widget
+#   2. Install Ctrl+C handler     ← before event loop starts
+#   3. select_port()              ← input() safe, serial not started
+#   4. Start serial thread        ← NO MORE input() after this point
+#   5. time.sleep(2.0)            ← ESP32 stabilise
+#   6. drain_queue()              ← discard startup noise
+#   7. CalibrationWizard          ← GUI dialog, reads Queue directly
+#   8. Start processing thread    ← connects signals to MainWindow
+#   9. Show MainWindow            ← live sensor display
+#  10. app.exec_()                ← Qt event loop runs
+#  11. Stop processing thread     ← .stop() then .wait()
+#  12. Stop serial thread         ← .stop() then .join()
 #
-# Phase 2 is complete when:
-#   [ ] Open hand reads ~0.0, fully bent reads ~1.0 after calibration
-#   [ ] EMA smoothing visibly reduces noise vs Phase 1 raw values
-#   [ ] Frame drop during test logs warning correctly
-#   [ ] Ctrl+C exits cleanly with no crash
+# Phase 3 is complete when:
+#   [ ] App opens → calibration wizard runs → main window appears
+#   [ ] Bend prototype finger → R_T value updates live on screen
+#   [ ] Status bar shows ~30 Hz
 # =============================================================
 
 import queue
@@ -25,17 +29,14 @@ import logging
 import sys
 import signal
 
-from PyQt5.QtCore import QCoreApplication, QTimer
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QTimer
 
-from config import QUEUE_MAX_SIZE, FINGER_CHANNELS
+from config import QUEUE_MAX_SIZE
 from communication.serial_thread import SerialThread
-from processing.calibration import (
-    CalibrationData,
-    save_calibration,
-    load_calibration,
-    get_today_calibration_path,
-)
 from processing.processing_thread import ProcessingThread
+from ui.main_window import MainWindow
+from ui.calibration_wizard import CalibrationWizard
 
 # --- Logging ---
 logging.basicConfig(
@@ -93,185 +94,92 @@ def drain_queue(frame_queue: queue.Queue):
             break
 
 
-def run_console_calibration(frame_queue: queue.Queue) -> CalibrationData:
-    """
-    Collect open and closed hand readings using countdown timer.
-    No input() calls — serial thread runs freely, Queue never overflows.
-    """
-    cal = CalibrationData()
-
-    print("\n" + "=" * 55)
-    print("  CALIBRATION")
-    print("=" * 55)
-
-    # --- Step 1: Open hand ---
-    print("\nStep 1 of 2: OPEN your hand fully — spread all fingers.")
-    print("  You have 3 seconds to position your hand.")
-    countdown(3, "Opening hand")
-
-    drain_queue(frame_queue)
-
-    print("  Recording...")
-    open_frames = []
-    for _ in range(30):
-        try:
-            frame = frame_queue.get(timeout=2.0)
-            open_frames.append(frame)
-        except queue.Empty:
-            print("[ERROR] No frames received — check ESP32 connection")
-            sys.exit(1)
-
-    for hand in ['right', 'left']:
-        for ch in FINGER_CHANNELS:
-            avg = sum(f[hand][ch] for f in open_frames) / len(open_frames)
-            cal.set_min(hand, ch, avg)
-
-    r_thumb_open = sum(
-        f['right']['thumb'] for f in open_frames
-    ) / len(open_frames)
-    print(f"  Open hand recorded.   R_Thumb = {r_thumb_open:.1f} ADC")
-
-    # --- Step 2: Closed hand ---
-    print("\nStep 2 of 2: CLOSE your hand fully — bend finger at middle joint.")
-    print("  You have 3 seconds to position your hand.")
-    countdown(3, "Closing hand")
-
-    drain_queue(frame_queue)
-
-    print("  Recording...")
-    closed_frames = []
-    for _ in range(30):
-        try:
-            frame = frame_queue.get(timeout=2.0)
-            closed_frames.append(frame)
-        except queue.Empty:
-            print("[ERROR] No frames received — check ESP32 connection")
-            sys.exit(1)
-
-    for hand in ['right', 'left']:
-        for ch in FINGER_CHANNELS:
-            avg = sum(f[hand][ch] for f in closed_frames) / len(closed_frames)
-            cal.set_max(hand, ch, avg)
-
-    r_thumb_closed = sum(
-        f['right']['thumb'] for f in closed_frames
-    ) / len(closed_frames)
-    print(f"  Closed hand recorded. R_Thumb = {r_thumb_closed:.1f} ADC")
-
-    saved_path = save_calibration(cal)
-    print(f"\n  Calibration saved: {saved_path}")
-    print(f"  Range: {r_thumb_open:.1f} (open) → {r_thumb_closed:.1f} (closed)")
-    print("=" * 55)
-
-    return cal
-
-
-def on_frame_received(processed_frame: dict):
-    """
-    Slot connected to ProcessingThread.frame_ready signal.
-    Prints normalized values to console.
-    Phase 3 replaces this with UI label updates.
-    """
-    r = processed_frame['right']
-    fid = processed_frame['frame_id']
-
-    print(
-        f"{fid:>6} | "
-        f"R_T: {r['thumb']:.2f} | "
-        f"R_I: {r['index']:.2f} | "
-        f"R_M: {r['middle']:.2f} | "
-        f"R_R: {r['ring']:.2f} | "
-        f"R_L: {r['little']:.2f} | "
-        f"Pitch: {r['pitch']:>6.1f}"
-    )
-
-
-def on_status_message(message: str):
-    """Slot for processing thread warnings."""
-    logger.warning(message)
-
-
 def main():
-    app = QCoreApplication(sys.argv)
+    # QApplication required for any window/widget to render.
+    # Phase 2 used QCoreApplication (no UI). Phase 3 upgrades to QApplication.
+    # Must be created before any QWidget, QDialog, or QThread that uses signals.
+    app = QApplication(sys.argv)
 
-    # ── Clean Ctrl+C shutdown ─────────────────────────────────────
-    # Problem: Qt event loop (app.exec_()) catches signals internally
-    # and doesn't pass Ctrl+C to Python cleanly → causes core dump.
-    #
-    # Fix: install a Python signal handler that calls app.quit().
-    # app.quit() tells the Qt event loop to exit cleanly.
-    # The finally block then stops all threads gracefully.
-    #
-    # The QTimer trick: Python signal handlers only run when Python
-    # is executing — but app.exec_() blocks Python while Qt runs.
-    # A QTimer firing every 200ms gives Python a chance to check
-    # for signals, so Ctrl+C is caught promptly.
+    # ── Clean Ctrl+C shutdown ─────────────────────────────────────────
+    # Qt catches SIGINT internally and doesn't pass it to Python cleanly.
+    # Fix: route SIGINT → app.quit(), which exits the event loop cleanly.
+    # QTimer fires every 200ms to give Python a chance to check for signals
+    # (Python signal handlers only run when Python bytecode is executing,
+    # not while Qt's C++ event loop is blocking).
     signal.signal(signal.SIGINT, lambda *args: app.quit())
-    timer = QTimer()
-    timer.start(200)
-    timer.timeout.connect(lambda: None)  # wake Python every 200ms
+    ctrlc_timer = QTimer()
+    ctrlc_timer.start(200)
+    ctrlc_timer.timeout.connect(lambda: None)
 
-    print("=" * 55)
-    print("  Smart Glove Dataset Studio — Phase 2 Test")
-    print("  Filter + Normalize Pipeline")
-    print("=" * 55)
-
-    # ── Step 1: Select port ───────────────────────────────────────
-    # input() safe here — serial thread not started yet
+    # ── Step 1: Select serial port ────────────────────────────────────
+    # input() is safe here — serial thread not started yet.
+    # QApplication exists but no window is showing yet.
     port = select_port()
 
-    # ── Step 2: Decide calibration ────────────────────────────────
-    # input() safe here — serial thread not started yet
-    use_existing = False
-    today_path = get_today_calibration_path()
-    if today_path:
-        print(f"\nFound existing calibration: {today_path}")
-        choice = input("Use existing calibration? (y/n): ").strip().lower()
-        use_existing = (choice == 'y')
-
-    # ── Step 3: Start serial thread ───────────────────────────────
+    # ── Step 2: Start serial thread ───────────────────────────────────
     # NO MORE input() calls after this point.
+    # Once the serial thread is running, the Queue starts filling.
+    # Any blocking input() would stall the main thread, cause Queue
+    # overflow, and flood the console with "Queue full" warnings.
     frame_queue = queue.Queue(maxsize=QUEUE_MAX_SIZE)
     serial_thread = SerialThread(port, frame_queue)
     serial_thread.start()
-    print(f"\nSerial thread started on {port}")
+    logger.info(f"Serial thread started on {port}")
 
-    # Wait for ESP32 to stabilise and flush startup noise
-    print("Waiting for ESP32 to stabilise...")
+    # ── Step 3: Wait for ESP32 to stabilise ──────────────────────────
+    # ESP32 sends garbage bytes on startup before settling into the
+    # packet protocol. sleep(2.0) lets it stabilise, then drain_queue()
+    # discards any noise frames that arrived during that window.
     time.sleep(2.0)
     drain_queue(frame_queue)
-    print("Ready.")
 
-    # ── Step 4: Calibration ───────────────────────────────────────
-    if use_existing:
-        calibration_data = load_calibration(today_path)
-        print("Existing calibration loaded.")
-    else:
-        calibration_data = run_console_calibration(frame_queue)
+    # ── Step 4: Calibration wizard ────────────────────────────────────
+    # QDialog.exec_() blocks here until the user finishes calibration.
+    # The wizard reads from frame_queue directly (ProcessingThread hasn't
+    # started yet — calibration needs raw ADC values, not processed ones).
+    # Returns (profile_name, CalibrationData) on success, (None, None) on cancel.
+    wizard = CalibrationWizard(frame_queue)
+    profile_name, calibration_data = wizard.run_wizard()
 
-    # ── Step 5: Start processing thread ──────────────────────────
+    if calibration_data is None:
+        # User cancelled calibration — exit cleanly
+        serial_thread.stop()
+        serial_thread.join(timeout=2)
+        sys.exit(0)
+
+    # ── Step 5: Build main window ─────────────────────────────────────
+    # Window is constructed but not shown yet — show() after connecting signals.
+    window = MainWindow()
+    window.set_connected(True)
+
+    # ── Step 6: Start processing thread ──────────────────────────────
+    # Connect signals BEFORE start() — avoids a race condition where the
+    # thread emits a signal before the slot is connected.
     processing_thread = ProcessingThread(frame_queue, calibration_data)
-    processing_thread.frame_ready.connect(on_frame_received)
-    processing_thread.status_message.connect(on_status_message)
+    processing_thread.frame_ready.connect(window.on_frame_ready)
+    processing_thread.status_message.connect(window.on_status_message)
     processing_thread.start()
 
-    print(f"\nBend your finger — watch R_T move between 0.00 and 1.00.")
-    print("Press Ctrl+C to stop cleanly.\n")
-    print(f"{'Frame':>6} | {'R_T':>6} | {'R_I':>6} | "
-          f"{'R_M':>6} | {'R_R':>6} | {'R_L':>6} | {'Pitch':>8}")
-    print("-" * 65)
+    # ── Step 7: Show window and run event loop ────────────────────────
+    window.setWindowTitle(
+        f"Smart Glove Dataset Studio  —  {profile_name}"
+    )
+    window.show()
 
-    # ── Step 6: Run Qt event loop ─────────────────────────────────
-    # app.exec_() runs until app.quit() is called (by Ctrl+C handler)
+    # app.exec_() runs until app.quit() is called (by Ctrl+C or window close)
     app.exec_()
 
-    # ── Step 7: Clean shutdown ────────────────────────────────────
-    print("\n\nStopping...")
+    # ── Step 8: Clean shutdown ────────────────────────────────────────
+    # Always stop processing thread before serial thread.
+    # Reason: processing thread reads from the Queue. If serial thread
+    # stops first, the Queue empties and processing thread's get(timeout=0.1)
+    # just times out repeatedly — harmless but wasteful. Stopping processing
+    # thread first is the clean order.
     processing_thread.stop()
-    processing_thread.wait()
+    processing_thread.wait()       # block until thread fully exits
     serial_thread.stop()
     serial_thread.join(timeout=2)
-    print("All threads stopped. Goodbye.")
+    logger.info("All threads stopped. Goodbye.")
 
 
 if __name__ == "__main__":

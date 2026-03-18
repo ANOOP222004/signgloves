@@ -179,30 +179,93 @@ class Calibrator:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Profile management
+# ─────────────────────────────────────────────────────────────────────────────
+
+def list_profiles() -> list:
+    """
+    Return a sorted list of existing profile names.
+
+    Scans CALIBRATION_DIR for subdirectories — each subdirectory is one
+    profile (e.g. 'anoop', 'teammate').
+
+    Returns [] if no profiles exist yet (first run).
+
+    Why subdirectories, not filename prefixes?
+        Subdirectories scale cleanly. Each profile gets its own folder
+        containing multiple date-stamped files. Prefixed filenames
+        (anoop_calibration_20250318.json) are harder to list, filter,
+        and reason about as the file count grows.
+    """
+    if not os.path.isdir(CALIBRATION_DIR):
+        return []
+
+    profiles = [
+        entry for entry in os.listdir(CALIBRATION_DIR)
+        if os.path.isdir(os.path.join(CALIBRATION_DIR, entry))
+    ]
+    return sorted(profiles)   # alphabetical order for consistent dropdown
+
+
+def create_profile(profile_name: str) -> str:
+    """
+    Create a new profile folder under CALIBRATION_DIR.
+
+    Args:
+        profile_name: name chosen by the user (e.g. 'anoop', 'teammate')
+                      Stored as-is — no forced lowercase, caller should
+                      normalise if needed.
+
+    Returns:
+        The path of the created folder.
+
+    Why exist_ok=True?
+        If the folder already exists (user typed an existing name),
+        this is silent — not an error. The caller (wizard) checks for
+        duplicates before calling this.
+    """
+    profile_dir = os.path.join(CALIBRATION_DIR, profile_name)
+    os.makedirs(profile_dir, exist_ok=True)
+    return profile_dir
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Calibration file save / load
 # ─────────────────────────────────────────────────────────────────────────────
 
-def save_calibration(calibration_data: CalibrationData) -> str:
+def save_calibration(calibration_data: CalibrationData, profile_name: str) -> str:
     """
-    Save calibration data to a JSON file.
+    Save calibration data to a date-stamped JSON file under the profile folder.
 
-    Filename includes today's date so each session has its own file.
-    This prevents stale calibration from a previous day being reused —
-    Hall sensors drift with temperature and wear.
+    File is saved to:
+        data/calibration/<profile_name>/calibration_<YYYYMMDD>.json
 
-    Returns the path of the saved file.
+    Why per-profile folders?
+        Each team member has different hand geometry and sensor placement.
+        A calibration file is only valid for the person who recorded it.
+        Separate folders prevent one person's calibration from overwriting
+        another's on the same day.
+
+    Args:
+        calibration_data: CalibrationData with min/max per finger channel
+        profile_name:     name of the user profile (e.g. 'anoop')
+
+    Returns:
+        Full filepath of the saved file.
     """
-    # Create calibration directory if it doesn't exist
-    os.makedirs(CALIBRATION_DIR, exist_ok=True)
+    # Ensure the profile folder exists
+    # (create_profile was called by wizard, but exist_ok=True is safe insurance)
+    profile_dir = os.path.join(CALIBRATION_DIR, profile_name)
+    os.makedirs(profile_dir, exist_ok=True)
 
-    # Date-stamped filename — one file per day
+    # Date-stamped filename — one file per day per profile
     date_str = datetime.now().strftime('%Y%m%d')
-    filename = f'calibration_{date_str}.json'
-    filepath = os.path.join(CALIBRATION_DIR, filename)
+    filename  = f'calibration_{date_str}.json'
+    filepath  = os.path.join(profile_dir, filename)
 
-    # Build the dict to save
     data = {
-        'date': date_str,
+        'date':       date_str,
+        'profile':    profile_name,
         'min_values': calibration_data.min_values,
         'max_values': calibration_data.max_values,
     }
@@ -217,8 +280,9 @@ def load_calibration(filepath: str) -> CalibrationData:
     """
     Load calibration data from a JSON file.
 
-    Called on startup if a calibration file exists for today.
-    If no file exists, the calibration wizard runs instead.
+    Unchanged from Phase 2 — takes a full filepath.
+    Profile awareness is handled by get_today_calibration_path(),
+    not here. This function doesn't need to know about profiles.
 
     Args:
         filepath: full path to calibration JSON file
@@ -236,16 +300,19 @@ def load_calibration(filepath: str) -> CalibrationData:
     return cal
 
 
-def get_today_calibration_path() -> str | None:
+def get_today_calibration_path(profile_name: str) -> str | None:
     """
-    Check if a calibration file exists for today.
+    Check if a calibration file exists for today under the given profile.
 
-    Returns the filepath if found, None if not found.
-    Called on startup — if None, run calibration wizard.
-    If found, load and skip wizard.
+    Args:
+        profile_name: name of the user profile to check
+
+    Returns:
+        Full filepath if today's calibration exists for this profile.
+        None if not found — caller should run the calibration wizard.
     """
     date_str = datetime.now().strftime('%Y%m%d')
-    filename = f'calibration_{date_str}.json'
-    filepath = os.path.join(CALIBRATION_DIR, filename)
+    filename  = f'calibration_{date_str}.json'
+    filepath  = os.path.join(CALIBRATION_DIR, profile_name, filename)
 
     return filepath if os.path.exists(filepath) else None
