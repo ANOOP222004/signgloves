@@ -30,6 +30,8 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont
 
 from config import FINGER_CHANNELS, IMU_CHANNELS
+from ui.recorder_panel import RecorderPanel
+from ui.dataset_panel import DatasetPanel
 
 
 # Human-readable display names for each finger channel.
@@ -64,7 +66,7 @@ class MainWindow(QMainWindow):
         window.show()
     """
 
-    def __init__(self):
+    def __init__(self, recorder_panel=None, dataset_panel=None):
         super().__init__()
 
         self.setWindowTitle("Smart Glove Dataset Studio")
@@ -85,7 +87,7 @@ class MainWindow(QMainWindow):
         self._fps_timer.start()
 
         # ── Build the UI ──────────────────────────────────────────────
-        self._build_ui()
+        self._build_ui(recorder_panel, dataset_panel)
 
         # ── Status bar ────────────────────────────────────────────────
         # QMainWindow has a built-in status bar — we just use it.
@@ -98,7 +100,7 @@ class MainWindow(QMainWindow):
 
     # ── UI Construction ───────────────────────────────────────────────
 
-    def _build_ui(self):
+    def _build_ui(self, recorder_panel=None, dataset_panel=None):
         """
         Construct the full window layout.
 
@@ -106,20 +108,32 @@ class MainWindow(QMainWindow):
             QMainWindow
             └── central_widget (QWidget)
                 └── root_layout (QHBoxLayout)
-                    ├── _build_sensor_panel()   ← live sensor values
-                    ├── _build_recorder_panel() ← stub, Phase 4
-                    └── _build_dataset_panel()  ← stub, Phase 4
+                    ├── _build_sensor_panel()  ← live sensor values
+                    ├── RecorderPanel or stub  ← Phase 4 real / fallback
+                    └── DatasetPanel or stub   ← Phase 4 real / fallback
+
+        Args:
+            recorder_panel: RecorderPanel instance, or None for stub
+            dataset_panel:  DatasetPanel instance, or None for stub
         """
-        central = QWidget()                   # every QMainWindow needs a central widget
+        central = QWidget()
         self.setCentralWidget(central)
 
-        root_layout = QHBoxLayout(central)    # three panels side by side
+        root_layout = QHBoxLayout(central)
         root_layout.setSpacing(10)
         root_layout.setContentsMargins(10, 10, 10, 10)
 
-        root_layout.addWidget(self._build_sensor_panel(),   stretch=2)
-        root_layout.addWidget(self._build_recorder_panel(), stretch=1)
-        root_layout.addWidget(self._build_dataset_panel(),  stretch=1)
+        root_layout.addWidget(self._build_sensor_panel(), stretch=2)
+
+        if recorder_panel is not None:
+            root_layout.addWidget(recorder_panel, stretch=1)
+        else:
+            root_layout.addWidget(self._build_recorder_panel(), stretch=1)
+
+        if dataset_panel is not None:
+            root_layout.addWidget(dataset_panel, stretch=1)
+        else:
+            root_layout.addWidget(self._build_dataset_panel(), stretch=1)
 
     def _build_sensor_panel(self) -> QGroupBox:
         """

@@ -37,6 +37,11 @@ from communication.serial_thread import SerialThread
 from processing.processing_thread import ProcessingThread
 from ui.main_window import MainWindow
 from ui.calibration_wizard import CalibrationWizard
+from ui.recorder_panel import RecorderPanel
+from ui.dataset_panel import DatasetPanel
+from recording.gesture_recorder import GestureRecorder
+from dataset.dataset_manager import DatasetManager
+from voice.voice_listener import VoiceListener
 
 # --- Logging ---
 logging.basicConfig(
@@ -147,9 +152,34 @@ def main():
         serial_thread.join(timeout=2)
         sys.exit(0)
 
-    # ── Step 5: Build main window ─────────────────────────────────────
-    # Window is constructed but not shown yet — show() after connecting signals.
-    window = MainWindow()
+    # ── Step 5: Build Phase 4 objects ─────────────────────────────────
+    # DatasetManager now takes profile_name so every saved file is tagged
+    # with who recorded it: anoop_sample_001.csv, teammate1_sample_001.csv etc.
+    dataset_manager = DatasetManager(profile_name=profile_name)
+    recorder        = GestureRecorder()
+
+    # VoiceListener is constructed here but NOT started.
+    # It starts only when the user clicks the 🎤 Voice OFF button in the UI.
+    # Constructing it here (not inside RecorderPanel) keeps threading concerns
+    # in main.py — the same pattern used for SerialThread and ProcessingThread.
+    voice_listener = VoiceListener()
+
+    # ── Step 5b: Build panels ─────────────────────────────────────────
+    recorder_panel = RecorderPanel(recorder, dataset_manager, voice_listener)
+    dataset_panel  = DatasetPanel(dataset_manager)
+
+    # Wire sample_saved → dataset_panel.refresh()
+    recorder_panel.sample_saved.connect(dataset_panel.refresh)
+
+    # Wire voice listener signals → recorder_panel slots
+    # Done here (not inside RecorderPanel) so VoiceListener stays
+    # decoupled from RecorderPanel — same reason ProcessingThread
+    # signals are wired in main.py rather than inside the panels.
+    voice_listener.command_detected.connect(recorder_panel.on_voice_command)
+    voice_listener.error_occurred.connect(recorder_panel.on_voice_error)
+
+    # ── Step 5c: Build main window ────────────────────────────────────
+    window = MainWindow(recorder_panel=recorder_panel, dataset_panel=dataset_panel)
     window.set_connected(True)
 
     # ── Step 6: Start processing thread ──────────────────────────────
@@ -158,6 +188,31 @@ def main():
     processing_thread = ProcessingThread(frame_queue, calibration_data)
     processing_thread.frame_ready.connect(window.on_frame_ready)
     processing_thread.status_message.connect(window.on_status_message)
+
+    # Phase 4 — frame intake for gesture recorder
+    # GestureRecorder.on_frame() is called on every processed frame.
+    # It ignores frames when not recording (is_idle state) — no cost.
+    processing_thread.frame_ready.connect(recorder.on_frame)
+
+    # Phase 4 — frame drop detection during recording
+    # If a drop occurs while recording, GestureRecorder discards the buffer
+    # and emits capture_failed → RecorderPanel shows warning.
+    processing_thread.frame_drop_detected.connect(recorder.on_frame_drop)
+
+    # Phase 4 — RecorderPanel tells ProcessingThread when recording starts/stops
+    # set_recording(True/False) controls whether frame drops are fatal.
+    recorder_panel.recording_started.connect(
+        lambda: processing_thread.set_recording(True)
+    )
+    recorder_panel.recording_stopped.connect(
+        lambda: processing_thread.set_recording(False)
+    )
+
+    # Phase 4 — reset EMA filters at the start of each recording
+    # Prevents stale filter state from a previous gesture bleeding into
+    # the first few frames of the new capture.
+    recorder_panel.recording_started.connect(processing_thread.reset_filters)
+
     processing_thread.start()
 
     # ── Step 7: Show window and run event loop ────────────────────────
@@ -170,13 +225,13 @@ def main():
     app.exec_()
 
     # ── Step 8: Clean shutdown ────────────────────────────────────────
-    # Always stop processing thread before serial thread.
-    # Reason: processing thread reads from the Queue. If serial thread
-    # stops first, the Queue empties and processing thread's get(timeout=0.1)
-    # just times out repeatedly — harmless but wasteful. Stopping processing
-    # thread first is the clean order.
+    # Stop voice listener first — it has no dependencies on other threads.
+    voice_listener.stop()
+    voice_listener.wait()
+
+    # Stop processing thread before serial thread.
     processing_thread.stop()
-    processing_thread.wait()       # block until thread fully exits
+    processing_thread.wait()
     serial_thread.stop()
     serial_thread.join(timeout=2)
     logger.info("All threads stopped. Goodbye.")

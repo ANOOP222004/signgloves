@@ -36,3 +36,35 @@ CALIBRATION_DIR = 'data/calibration'
 # Channel name lists — used by calibration and processing
 FINGER_CHANNELS = ['thumb', 'index', 'middle', 'ring', 'little']
 IMU_CHANNELS    = ['pitch', 'roll', 'yaw']
+
+# --- Gesture Vocabulary ---
+# The 10 ISL signs targeted for this dataset.
+# Used by RecorderPanel (dropdown) and DatasetPanel (display list).
+# Stored here so adding/removing a sign only requires editing this one list.
+GESTURE_LABELS = [
+    'HELLO', 'STOP', 'YES', 'NO', 'THANKYOU',
+    'SORRY', 'HELP', 'WATER', 'PLEASE', 'MORE',
+]
+
+# --- Voice Commands ---
+# Path to the Vosk speech recognition model folder.
+# Download: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+# Extract so this path points to the folder containing 'am/', 'conf/', etc.
+# On Windows use forward slashes or raw string — os.path handles both.
+VOICE_MODEL_PATH = "voice/vosk-model-small-en-us-0.15"
+
+# The four words the voice listener recognises.
+# Vosk is configured with ONLY these words — makes recognition faster and
+# more accurate because the model only distinguishes 4 words, not 170,000.
+# Must be lowercase — Vosk returns lowercase text.
+VOICE_COMMANDS = ["start", "stop", "save", "discard"]
+
+# Audio sample rate for microphone input.
+# 16000 Hz is the standard for Vosk models — do not change.
+VOICE_SAMPLE_RATE = 16000
+
+# Audio block size fed to Vosk per recognition step.
+# 8000 samples at 16000 Hz = 0.5 seconds of audio per chunk.
+# Smaller = lower latency, more CPU. Larger = higher latency, less CPU.
+# 8000 is a good balance for short command words.
+VOICE_BLOCK_SIZE = 8000
