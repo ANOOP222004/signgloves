@@ -50,12 +50,10 @@ GESTURE_LABELS = [
 # Path to the Vosk speech recognition model folder.
 # Download: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
 # Extract so this path points to the folder containing 'am/', 'conf/', etc.
-# On Windows use forward slashes or raw string — os.path handles both.
 VOICE_MODEL_PATH = "voice/vosk-model-small-en-us-0.15"
 
 # The four words the voice listener recognises.
-# Vosk is configured with ONLY these words — makes recognition faster and
-# more accurate because the model only distinguishes 4 words, not 170,000.
+# Fixed vocabulary mode — Vosk only distinguishes these 4 words.
 # Must be lowercase — Vosk returns lowercase text.
 VOICE_COMMANDS = ["start", "stop", "save", "discard"]
 
@@ -65,6 +63,28 @@ VOICE_SAMPLE_RATE = 16000
 
 # Audio block size fed to Vosk per recognition step.
 # 8000 samples at 16000 Hz = 0.5 seconds of audio per chunk.
-# Smaller = lower latency, more CPU. Larger = higher latency, less CPU.
-# 8000 is a good balance for short command words.
 VOICE_BLOCK_SIZE = 8000
+
+# --- Signal Plot (Phase 5) ---
+
+# How many frames of history the scrolling plot shows.
+# 90 frames at 30 Hz = 3 seconds — enough to see one full gesture plus context.
+PLOT_HISTORY_FRAMES = 90
+
+# Plot redraw rate in milliseconds.
+# 50ms = 20 Hz redraws. Data is still captured at full 30 Hz via on_frame().
+# Drawing at 20 Hz instead of 30 Hz reduces GPU/CPU work by 33% with no
+# visible difference to the human eye (smooth motion perception starts ~15 Hz).
+PLOT_TIMER_MS = 50
+
+# Color for each finger channel in the signal plot.
+# Same finger = same color on both Right and Left hand graphs.
+# Format: (R, G, B) integers 0-255 — PyQtGraph's native color format.
+# Chosen to be visually distinct and readable on both light and dark backgrounds.
+FINGER_COLORS = {
+    'thumb':  (220,  50,  50),   # red
+    'index':  ( 50, 200,  50),   # green
+    'middle': ( 50, 130, 255),   # blue
+    'ring':   (255, 165,   0),   # orange
+    'little': (180,  80, 220),   # purple
+}

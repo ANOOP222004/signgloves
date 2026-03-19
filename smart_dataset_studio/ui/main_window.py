@@ -1,30 +1,20 @@
 # ui/main_window.py
 #
-# Main application window for the Smart Glove Dataset Studio.
+# Main application window — tabbed layout.
 #
-# What this does:
-#   - Displays all 16 live sensor values (10 fingers + 6 IMU)
-#   - Shows connection status and live frame rate in the status bar
-#   - Provides stub panels for Recorder and Dataset (Phase 4 fills these in)
+# Six tabs:
+#   Dashboard   — live sensor value labels
+#   Record      — RecorderPanel + DatasetPanel + SignalPlotWidget
+#   Visualize   — stub for Phase 6 (3D skeleton + tuning sliders)
+#   Calibration — CalibrationTab (profile management + inline capture)
+#   Dataset     — stub for Phase 7 (analysis tools)
+#   Export      — stub for Phase 8 (ML export)
 #
-# How it fits into the thread architecture:
-#   ProcessingThread emits frame_ready signal (carries processed frame dict)
-#   → this window's on_frame_ready() slot receives it on the main thread
-#   → updates QLabel widgets with new values
-#
-# Rules this file follows:
-#   - Never touches the Queue directly (that belongs to ProcessingThread)
-#   - Never calls any ProcessingThread methods directly (only via signals)
-#   - All UI updates happen in the main thread only (Qt requirement)
-#   - No magic numbers — all constants from config.py
+# Status bar stays outside tabs — always visible.
 
 from PyQt5.QtWidgets import (
-    QMainWindow,     # Top-level window with menu bar + status bar
-    QWidget,         # Base class for all UI elements
-    QHBoxLayout,     # Arranges children left-to-right
-    QVBoxLayout,     # Arranges children top-to-bottom
-    QLabel,          # Displays a text string
-    QGroupBox,       # Labelled box that visually groups related widgets
+    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
+    QLabel, QGroupBox, QTabWidget,
 )
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont
@@ -32,311 +22,275 @@ from PyQt5.QtGui import QFont
 from config import FINGER_CHANNELS, IMU_CHANNELS
 from ui.recorder_panel import RecorderPanel
 from ui.dataset_panel import DatasetPanel
+from ui.calibration_tab import CalibrationTab
+from ui.style import bend_color
+from visualization.signal_plot import SignalPlotWidget
 
-
-# Human-readable display names for each finger channel.
-# These are the labels shown in the UI, not the internal key names.
-# Internal keys (from frame dict): 'thumb', 'index', 'middle', 'ring', 'little'
 FINGER_DISPLAY_NAMES = {
-    'thumb':  'Thumb',
-    'index':  'Index',
-    'middle': 'Middle',
-    'ring':   'Ring',
-    'little': 'Little',
+    'thumb': 'Thumb', 'index': 'Index', 'middle': 'Middle',
+    'ring':  'Ring',  'little': 'Little',
 }
-
-# Human-readable display names for IMU channels.
 IMU_DISPLAY_NAMES = {
-    'pitch': 'Pitch',
-    'roll':  'Roll',
-    'yaw':   'Yaw',
+    'pitch': 'Pitch', 'roll': 'Roll', 'yaw': 'Yaw',
 }
 
 
 class MainWindow(QMainWindow):
     """
-    Main window of the Smart Glove Dataset Studio.
+    Main window of the Smart Glove Dataset Studio — tabbed layout.
 
-    Receives processed sensor frames via Qt Signal and displays them live.
+    Public attributes (accessed by main.py for signal wiring):
+        self.plot_widget      — SignalPlotWidget (Record tab)
+        self.calibration_tab  — CalibrationTab  (Calibration tab)
 
-    Usage (from main.py):
-        window = MainWindow()
-        processing_thread.frame_ready.connect(window.on_frame_ready)
-        processing_thread.status_message.connect(window.on_status_message)
-        window.show()
+    Full signal wiring in main.py — see main.py for complete list.
     """
 
     def __init__(self, recorder_panel=None, dataset_panel=None):
         super().__init__()
 
         self.setWindowTitle("Smart Glove Dataset Studio")
-        self.setMinimumSize(900, 400)   # prevents layout from collapsing
+        self.setMinimumSize(960, 700)
 
-        # ── Frame rate tracking ───────────────────────────────────────
-        # Count how many frames arrive per second.
-        # _frame_count increments every time on_frame_ready() is called.
-        # A QTimer fires every 1000ms, reads the count, updates the
-        # status bar label, then resets the count to 0.
-        # Why a timer rather than computing rate inside on_frame_ready?
-        # Because computing rate per-frame requires division and
-        # timestamps on every call — expensive at 30 Hz. Counting is O(1).
         self._frame_count = 0
         self._fps_timer = QTimer()
-        self._fps_timer.setInterval(1000)           # fire every 1 second
+        self._fps_timer.setInterval(1000)
         self._fps_timer.timeout.connect(self._update_fps)
         self._fps_timer.start()
 
-        # ── Build the UI ──────────────────────────────────────────────
         self._build_ui(recorder_panel, dataset_panel)
 
-        # ── Status bar ────────────────────────────────────────────────
-        # QMainWindow has a built-in status bar — we just use it.
-        # showMessage() sets the left-side text.
-        # We add a permanent right-side widget for frame rate.
         self._fps_label = QLabel("0 Hz")
         self._fps_label.setAlignment(Qt.AlignRight)
         self.statusBar().addPermanentWidget(self._fps_label)
         self.statusBar().showMessage("Connecting...")
 
-    # ── UI Construction ───────────────────────────────────────────────
+    # ── UI ────────────────────────────────────────────────────────────
 
-    def _build_ui(self, recorder_panel=None, dataset_panel=None):
-        """
-        Construct the full window layout.
-
-        Layout structure:
-            QMainWindow
-            └── central_widget (QWidget)
-                └── root_layout (QHBoxLayout)
-                    ├── _build_sensor_panel()  ← live sensor values
-                    ├── RecorderPanel or stub  ← Phase 4 real / fallback
-                    └── DatasetPanel or stub   ← Phase 4 real / fallback
-
-        Args:
-            recorder_panel: RecorderPanel instance, or None for stub
-            dataset_panel:  DatasetPanel instance, or None for stub
-        """
+    def _build_ui(self, recorder_panel, dataset_panel):
         central = QWidget()
         self.setCentralWidget(central)
 
-        root_layout = QHBoxLayout(central)
-        root_layout.setSpacing(10)
-        root_layout.setContentsMargins(10, 10, 10, 10)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        root_layout.addWidget(self._build_sensor_panel(), stretch=2)
+        tabs = QTabWidget()
+        tabs.setDocumentMode(True)
 
-        if recorder_panel is not None:
-            root_layout.addWidget(recorder_panel, stretch=1)
-        else:
-            root_layout.addWidget(self._build_recorder_panel(), stretch=1)
+        # Tab 0 — Dashboard
+        tabs.addTab(self._build_dashboard_tab(), "📊  Dashboard")
 
-        if dataset_panel is not None:
-            root_layout.addWidget(dataset_panel, stretch=1)
-        else:
-            root_layout.addWidget(self._build_dataset_panel(), stretch=1)
+        # Tab 1 — Record  (plot_widget created here, stored as self.plot_widget)
+        self.plot_widget = SignalPlotWidget()
+        tabs.addTab(self._build_record_tab(recorder_panel, dataset_panel), "⏺  Record")
+
+        # Tab 2 — Visualize stub
+        tabs.addTab(self._build_visualize_stub(), "🖐  Visualize")
+
+        # Tab 3 — Calibration (stored as self.calibration_tab for signal wiring)
+        self.calibration_tab = CalibrationTab()
+        tabs.addTab(self.calibration_tab, "⚙  Calibration")
+
+        # Tab 4 — Dataset Analysis stub
+        tabs.addTab(self._build_dataset_stub(), "📁  Dataset")
+
+        # Tab 5 — ML Export stub
+        tabs.addTab(self._build_export_stub(), "🚀  Export")
+
+        root.addWidget(tabs)
+
+    # ── Tab builders ──────────────────────────────────────────────────
+
+    def _build_dashboard_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.addWidget(self._build_sensor_panel())
+        layout.addStretch()
+        return page
+
+    def _build_record_tab(self, recorder_panel, dataset_panel) -> QWidget:
+        """
+        RecorderPanel + DatasetPanel side by side at top.
+        SignalPlotWidget fills the rest of the vertical space below.
+        """
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        top_row.addWidget(
+            recorder_panel if recorder_panel else self._stub("Recorder", "RecorderPanel not provided"),
+            stretch=1
+        )
+        top_row.addWidget(
+            dataset_panel if dataset_panel else self._stub("Dataset", "DatasetPanel not provided"),
+            stretch=1
+        )
+
+        layout.addLayout(top_row, stretch=0)
+        layout.addWidget(self.plot_widget, stretch=2)
+
+        return page
+
+    def _build_visualize_stub(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        group = QGroupBox("3D Hand Skeleton")
+        g_layout = QVBoxLayout(group)
+        msg = QLabel(
+            "Phase 6 — 3D Hand Skeleton\n\n"
+            "Requires full glove assembly (all 10 sensors).\n\n"
+            "Will include:\n"
+            "  •  Real-time 3D virtual hand mirroring glove movement\n"
+            "  •  Per-finger max rotation tuning sliders\n"
+            "  •  Global scale and wrist sensitivity controls\n"
+            "  •  Save / load tuning profile to JSON"
+        )
+        msg.setAlignment(Qt.AlignCenter)
+        msg.setStyleSheet("color: gray;")
+        msg.setFont(QFont("Arial", 10))
+        g_layout.addWidget(msg)
+        layout.addWidget(group)
+        return page
+
+    def _build_dataset_stub(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        group = QGroupBox("Dataset Analysis")
+        g_layout = QVBoxLayout(group)
+        msg = QLabel(
+            "Phase 7 — Dataset Analysis Tools\n\n"
+            "Will include:\n"
+            "  •  Per-gesture signal overlay plots\n"
+            "  •  Outlier detection\n"
+            "  •  Dataset statistics (mean, std per feature)\n"
+            "  •  Sample count balance chart"
+        )
+        msg.setAlignment(Qt.AlignCenter)
+        msg.setStyleSheet("color: gray;")
+        msg.setFont(QFont("Arial", 10))
+        g_layout.addWidget(msg)
+        layout.addWidget(group)
+        return page
+
+    def _build_export_stub(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        group = QGroupBox("ML Export")
+        g_layout = QVBoxLayout(group)
+        msg = QLabel(
+            "Phase 8 — ML Export System\n\n"
+            "Will include:\n"
+            "  •  dataset.npy  — shape (N, 60, 16)\n"
+            "  •  labels.npy   — shape (N,)\n"
+            "  •  label_map.json  — {HELLO: 0, STOP: 1, …}\n"
+            "  •  Flat CSV with label column\n"
+            "  •  TensorFlow Dataset format"
+        )
+        msg.setAlignment(Qt.AlignCenter)
+        msg.setStyleSheet("color: gray;")
+        msg.setFont(QFont("Arial", 10))
+        g_layout.addWidget(msg)
+        layout.addWidget(group)
+        return page
+
+    # ── Sensor panel (Dashboard) ──────────────────────────────────────
 
     def _build_sensor_panel(self) -> QGroupBox:
-        """
-        Build the live sensor values panel.
-
-        Contains two sub-groups side by side:
-            Left sub-group:  Right hand (5 fingers + 3 IMU)
-            Right sub-group: Left hand  (5 fingers + 3 IMU)
-
-        Stores label references in:
-            self._finger_labels[hand][channel] → QLabel showing 0.00–1.00
-            self._imu_labels[hand][channel]    → QLabel showing degrees
-
-        Why store label references?
-        on_frame_ready() needs to update these labels every frame.
-        Storing references avoids searching the widget tree on every update.
-        """
         group = QGroupBox("Sensor Values")
-        outer_layout = QHBoxLayout(group)
+        outer = QHBoxLayout(group)
 
-        # Dicts to hold label references for fast updates
-        # Structure: {'right': {'thumb': QLabel, ...}, 'left': {...}}
         self._finger_labels = {}
-        self._imu_labels = {}
+        self._imu_labels    = {}
 
         for hand in ['right', 'left']:
             self._finger_labels[hand] = {}
-            self._imu_labels[hand] = {}
+            self._imu_labels[hand]    = {}
 
-            # QGroupBox for each hand: "Right Hand" / "Left Hand"
-            hand_label = hand.capitalize() + " Hand"
-            hand_group = QGroupBox(hand_label)
-            hand_layout = QVBoxLayout(hand_group)
-            hand_layout.setSpacing(4)
+            hg     = QGroupBox(hand.capitalize() + " Hand")
+            hl     = QVBoxLayout(hg)
+            hl.setSpacing(4)
 
-            # ── Finger rows ───────────────────────────────────────────
-            # Each row: "Thumb    0.00"
-            # Label on left, value on right
             for ch in FINGER_CHANNELS:
                 row = QHBoxLayout()
+                nl  = QLabel(FINGER_DISPLAY_NAMES[ch])
+                nl.setMinimumWidth(60)
+                vl  = QLabel("0.00")
+                vl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                vl.setMinimumWidth(50)
+                vl.setFont(QFont("Courier", 10))
+                self._finger_labels[hand][ch] = vl
+                row.addWidget(nl)
+                row.addWidget(vl)
+                hl.addLayout(row)
 
-                # Channel display name (left side)
-                name_label = QLabel(FINGER_DISPLAY_NAMES[ch])
-                name_label.setMinimumWidth(60)
+            div = QLabel("── IMU ──")
+            div.setAlignment(Qt.AlignCenter)
+            div.setStyleSheet("color: gray; font-size: 9px;")
+            hl.addWidget(div)
 
-                # Value label (right side) — updated every frame
-                value_label = QLabel("0.00")
-                value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                value_label.setMinimumWidth(50)
-                value_label.setFont(QFont("Courier", 10))  # monospace for stable width
-
-                self._finger_labels[hand][ch] = value_label  # store reference
-
-                row.addWidget(name_label)
-                row.addWidget(value_label)
-                hand_layout.addLayout(row)
-
-            # ── Divider ───────────────────────────────────────────────
-            divider = QLabel("── IMU ──")
-            divider.setAlignment(Qt.AlignCenter)
-            divider.setStyleSheet("color: gray; font-size: 9px;")
-            hand_layout.addWidget(divider)
-
-            # ── IMU rows ──────────────────────────────────────────────
-            # Each row: "Pitch    0.0°"
-            # IMU values are degrees — no normalization, range -180 to 180
             for ch in IMU_CHANNELS:
                 row = QHBoxLayout()
+                nl  = QLabel(IMU_DISPLAY_NAMES[ch])
+                nl.setMinimumWidth(60)
+                vl  = QLabel("  0.0°")
+                vl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                vl.setMinimumWidth(60)
+                vl.setFont(QFont("Courier", 10))
+                self._imu_labels[hand][ch] = vl
+                row.addWidget(nl)
+                row.addWidget(vl)
+                hl.addLayout(row)
 
-                name_label = QLabel(IMU_DISPLAY_NAMES[ch])
-                name_label.setMinimumWidth(60)
-
-                value_label = QLabel("  0.0°")
-                value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                value_label.setMinimumWidth(60)
-                value_label.setFont(QFont("Courier", 10))
-
-                self._imu_labels[hand][ch] = value_label  # store reference
-
-                row.addWidget(name_label)
-                row.addWidget(value_label)
-                hand_layout.addLayout(row)
-
-            hand_layout.addStretch()           # push rows to top
-            outer_layout.addWidget(hand_group)
+            hl.addStretch()
+            outer.addWidget(hg)
 
         return group
 
-    def _build_recorder_panel(self) -> QGroupBox:
-        """
-        Stub panel for Phase 4 — Gesture Recorder.
+    def _stub(self, title: str, msg: str) -> QGroupBox:
+        g = QGroupBox(title)
+        l = QVBoxLayout(g)
+        lbl = QLabel(msg)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("color: gray;")
+        l.addWidget(lbl)
+        return g
 
-        Returns an empty QGroupBox with a placeholder label.
-        Phase 4 will replace this stub with real recording controls.
-        """
-        group = QGroupBox("Recorder")
-        layout = QVBoxLayout(group)
-        placeholder = QLabel("Gesture recorder\n(Phase 4)")
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setStyleSheet("color: gray;")
-        layout.addWidget(placeholder)
-        return group
-
-    def _build_dataset_panel(self) -> QGroupBox:
-        """
-        Stub panel for Phase 4 — Dataset Manager.
-
-        Returns an empty QGroupBox with a placeholder label.
-        Phase 4 will replace this stub with sample counts and export controls.
-        """
-        group = QGroupBox("Dataset")
-        layout = QVBoxLayout(group)
-        placeholder = QLabel("Dataset manager\n(Phase 4)")
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setStyleSheet("color: gray;")
-        layout.addWidget(placeholder)
-        return group
-
-    # ── Signal Slots ──────────────────────────────────────────────────
+    # ── Slots ─────────────────────────────────────────────────────────
 
     def on_frame_ready(self, processed_frame: dict):
-        """
-        Slot connected to ProcessingThread.frame_ready signal.
-
-        Called on the main thread by Qt's signal routing — safe to update UI.
-        Updates all 16 sensor value labels with the latest processed frame.
-
-        Args:
-            processed_frame: dict with structure:
-                {
-                    'frame_id': int,
-                    'right': {
-                        'thumb': float (0.0-1.0),
-                        'index': float (0.0-1.0),
-                        'middle': float (0.0-1.0),
-                        'ring': float (0.0-1.0),
-                        'little': float (0.0-1.0),
-                        'pitch': float (degrees),
-                        'roll':  float (degrees),
-                        'yaw':   float (degrees),
-                    },
-                    'left': { same structure }
-                }
-        """
-        # Update all finger labels for both hands
         for hand in ['right', 'left']:
             for ch in FINGER_CHANNELS:
-                value = processed_frame[hand][ch]        # float 0.0–1.0
-                self._finger_labels[hand][ch].setText(f"{value:.2f}")
-
-            # Update all IMU labels for both hands
+                value = processed_frame[hand][ch]
+                label = self._finger_labels[hand][ch]
+                label.setText(f"{value:.2f}")
+                # Color the value by bend amount — instant visual feedback
+                # 0.0=gray, slight=blue, mid=amber, high=teal
+                label.setStyleSheet(f"color: {bend_color(value)};")
             for ch in IMU_CHANNELS:
-                value = processed_frame[hand][ch]        # float degrees
-                self._imu_labels[hand][ch].setText(f"{value:>6.1f}°")
-
-        # Increment frame counter for FPS tracking
-        # _fps_timer reads this every second and resets it
+                self._imu_labels[hand][ch].setText(
+                    f"{processed_frame[hand][ch]:>6.1f}°"
+                )
         self._frame_count += 1
 
     def on_status_message(self, message: str):
-        """
-        Slot connected to ProcessingThread.status_message signal.
-
-        Displays warnings (e.g. frame drops) in the status bar.
-        The message stays visible until the next status update.
-
-        Args:
-            message: warning string from processing thread
-        """
         self.statusBar().showMessage(message)
 
     def set_connected(self, connected: bool):
-        """
-        Update the status bar connection indicator.
+        self.statusBar().showMessage("Connected" if connected else "Disconnected")
 
-        Called from main.py after serial thread confirms connection.
-        Not connected to a signal — called directly since it's a
-        one-time event, not a recurring data update.
-
-        Args:
-            connected: True = show Connected, False = show Disconnected
-        """
-        if connected:
-            self.statusBar().showMessage("Connected")
-        else:
-            self.statusBar().showMessage("Disconnected")
-
-    # ── Private helpers ───────────────────────────────────────────────
+    def closeEvent(self, event):
+        self.plot_widget.stop()
+        super().closeEvent(event)
 
     def _update_fps(self):
-        """
-        Called every 1000ms by _fps_timer.
-
-        Reads _frame_count (frames received this second),
-        displays it in the permanent FPS label,
-        then resets the counter.
-
-        Why this approach:
-        At 30 Hz we receive 30 signals per second. Computing rate
-        inside on_frame_ready() would require timestamps and division
-        30 times per second. Counting is O(1) and a 1-second timer
-        batch-reads the result once — far more efficient.
-        """
-        fps = self._frame_count          # frames received in the last second
-        self._frame_count = 0            # reset for next second
+        fps = self._frame_count
+        self._frame_count = 0
         self._fps_label.setText(f"{fps} Hz")
