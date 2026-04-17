@@ -1,32 +1,45 @@
 #!/usr/bin/env python3
 # =============================================================
 # Smart Glove Dataset Studio - main.py
-# Tabbed UI — no startup wizard, calibration lives in its own tab.
+# Phase 6 Final — with permanent OpenGL fix
 #
-# Changes from Phase 5 (signal plots):
-#   - CalibrationWizard removed from startup sequence
-#   - ProcessingThread starts with empty CalibrationData()
-#   - DatasetManager profile starts as 'default', updated on cal save
-#   - Four new signal connections for CalibrationTab
-#   - RecorderPanel starts with Record button disabled
+# Permanent fix for black 3D skeleton on Ubuntu:
+#   Sets QT_XCB_GL_INTEGRATION=xcb_egl in os.environ BEFORE
+#   any Qt or PyQtGraph import. This is equivalent to running
+#   export QT_XCB_GL_INTEGRATION=xcb_egl before python3 main.py
+#   but is permanent — no manual export needed ever again.
 #
 # Startup sequence:
-#   1.  QApplication
-#   2.  Ctrl+C handler
-#   3.  select_port()
-#   4.  SerialThread.start()
-#   5.  time.sleep(2.0) + drain_queue()
-#   6.  Build all objects
-#   7.  Wire ALL signals BEFORE ProcessingThread.start()
-#   8.  ProcessingThread.start()
-#   9.  window.show() + app.exec_()
-#   10. Clean shutdown
+#   1.  Set OpenGL env vars (MUST be before all Qt imports)
+#   2.  QApplication + apply_style
+#   3.  Ctrl+C handler
+#   4.  select_port()
+#   5.  SerialThread.start()
+#   6.  time.sleep(2.0) + drain_queue()
+#   7.  Build all objects
+#   8.  Wire ALL signals BEFORE ProcessingThread.start()
+#   9.  ProcessingThread.start()
+#   10. window.show() + app.exec_()
+#   11. Clean shutdown
 # =============================================================
+
+import os
+import sys
+
+# ── PERMANENT OPENGL FIX ──────────────────────────────────────
+# CRITICAL: These must be set BEFORE any Qt or PyQtGraph import.
+# On Ubuntu, PyQtGraph GL defaults to a broken XCB GL integration.
+# xcb_egl forces the correct EGL backend that works reliably.
+# This is the permanent equivalent of:
+#   export QT_XCB_GL_INTEGRATION=xcb_egl
+#   export PYOPENGL_PLATFORM=egl
+os.environ.setdefault('QT_XCB_GL_INTEGRATION', 'xcb_egl')
+os.environ.setdefault('PYOPENGL_PLATFORM',     'egl')
+# ─────────────────────────────────────────────────────────────
 
 import queue
 import time
 import logging
-import sys
 import signal
 
 from PyQt5.QtWidgets import QApplication
@@ -53,9 +66,16 @@ logger = logging.getLogger("main")
 
 
 def select_port():
+    """
+    Lists available serial ports and asks user to select one.
+    Auto-selects if only one port is available.
+    Must be called BEFORE starting any threads — uses input().
+    """
     ports = SerialThread.list_ports()
     if not ports:
-        print("\n[ERROR] No serial ports found. Check ESP32 is plugged in.")
+        print("\n[ERROR] No serial ports found.")
+        print("Check that ESP32-S3 master is connected via USB.")
+        print("Use the UART port (right USB-C port on DevKitC-1).")
         sys.exit(1)
 
     print("\nAvailable serial ports:")
@@ -77,6 +97,7 @@ def select_port():
 
 
 def drain_queue(frame_queue: queue.Queue):
+    """Discard all frames in queue — flushes ESP32 boot noise."""
     while not frame_queue.empty():
         try:
             frame_queue.get_nowait()
@@ -85,8 +106,9 @@ def drain_queue(frame_queue: queue.Queue):
 
 
 def main():
+    # ── Qt Application ────────────────────────────────────────────────
     app = QApplication(sys.argv)
-    apply_style(app)   # dark theme — must be called before any widgets are created
+    apply_style(app)  # dark theme — MUST be before any widget
 
     # Clean Ctrl+C shutdown
     signal.signal(signal.SIGINT, lambda *args: app.quit())
@@ -94,21 +116,20 @@ def main():
     ctrlc_timer.start(200)
     ctrlc_timer.timeout.connect(lambda: None)
 
-    # Serial port selection
+    # ── Serial port selection ─────────────────────────────────────────
     port = select_port()
 
-    # Serial thread
+    # ── Serial thread ─────────────────────────────────────────────────
     frame_queue   = queue.Queue(maxsize=QUEUE_MAX_SIZE)
     serial_thread = SerialThread(port, frame_queue)
     serial_thread.start()
     logger.info(f"Serial thread started on {port}")
 
+    # Wait for ESP32 to stabilise, then flush startup noise
     time.sleep(2.0)
     drain_queue(frame_queue)
 
     # ── Build objects ─────────────────────────────────────────────────
-    # DatasetManager starts with profile 'default'.
-    # Connection #4 below updates this when the user saves a calibration.
     dataset_manager = DatasetManager(profile_name='default')
     recorder        = GestureRecorder()
     voice_listener  = VoiceListener()
@@ -120,13 +141,9 @@ def main():
     voice_listener.command_detected.connect(recorder_panel.on_voice_command)
     voice_listener.error_occurred.connect(recorder_panel.on_voice_error)
 
-    # MainWindow creates CalibrationTab and SignalPlotWidget internally.
-    # Access them via window.calibration_tab and window.plot_widget.
     window = MainWindow(recorder_panel=recorder_panel, dataset_panel=dataset_panel)
     window.set_connected(True)
 
-    # ProcessingThread starts with EMPTY calibration.
-    # All channels output 0.0 safely until calibration is saved.
     processing_thread = ProcessingThread(frame_queue, CalibrationData())
 
     # ── Wire ALL signals BEFORE start() ──────────────────────────────
@@ -147,32 +164,24 @@ def main():
     )
     recorder_panel.recording_started.connect(processing_thread.reset_filters)
 
-    # Signal plot
+    # Signal plots
     processing_thread.frame_ready.connect(window.plot_widget.on_frame)
     recorder_panel.recording_started.connect(window.plot_widget.on_recording_started)
     recorder_panel.recording_stopped.connect(window.plot_widget.on_recording_stopped)
     recorder.progress_updated.connect(window.plot_widget.on_recording_progress)
 
-    # ── Calibration tab — 4 connections ──────────────────────────────
+    # 3D Skeleton — Phase 6
+    processing_thread.frame_ready.connect(window.skeleton_widget.on_frame)
 
-    # 1. Feed raw ADC frames to CalibrationTab for min/max capture.
+    # Calibration tab — 4 connections
     processing_thread.raw_frame_ready.connect(window.calibration_tab.on_raw_frame)
 
-    # 2. When calibration is saved, swap it into ProcessingThread immediately.
-    #    update_calibration() replaces self.calibrator and resets all filters.
     window.calibration_tab.calibration_updated.connect(
         processing_thread.update_calibration
     )
-
-    # 3. When calibration is saved, enable the Record button.
     window.calibration_tab.calibration_updated.connect(
         recorder_panel.on_calibration_done
     )
-
-    # 4. When calibration is saved, update DatasetManager's profile name
-    #    so CSV files are saved with the correct profile prefix.
-    #    We read _profile_name from calibration_tab at emit time.
-    #    The lambda ignores the CalibrationData argument (we only need the name).
     window.calibration_tab.calibration_updated.connect(
         lambda _cal: setattr(
             dataset_manager,
