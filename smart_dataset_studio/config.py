@@ -114,3 +114,20 @@ SKELETON_DEFAULT_SCALE = 1.0
 # Increase if wrist rotation looks too subtle on screen.
 # Decrease if virtual hand rotates too aggressively.
 SKELETON_DEFAULT_IMU_SCALE = 1.0
+
+# ── Speed tagging (Phase 7) ───────────────────────────────────────────────────
+# Frame zones per recording speed. Used to label which part of the 60-frame
+# window captures the start, transition, and end of the gesture motion.
+# These ranges are inclusive start, exclusive end (Python slice convention).
+SLOW_ZONES   = {'start': (0, 10),  'transition': (10, 50), 'end': (50, 60)}
+MEDIUM_ZONES = {'start': (0, 8),   'transition': (8,  45), 'end': (45, 60)}
+FAST_ZONES   = {'start': (0, 5),   'transition': (5,  30), 'end': (30, 60)}
+
+# Keyed by speed tag string for easy lookup.
+SPEED_ZONES  = {'slow': SLOW_ZONES, 'medium': MEDIUM_ZONES, 'fast': FAST_ZONES}
+
+# Valid speed tag values.
+SPEED_TAGS   = ['slow', 'medium', 'fast']
+
+# Default speed used when the user hasn't changed the selector.
+DEFAULT_SPEED = 'medium'

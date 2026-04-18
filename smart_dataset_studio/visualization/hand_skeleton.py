@@ -83,8 +83,8 @@ CAMERA_PRESETS = {
 ROTATE_STEP = 15.0
 
 
-def _sphere_mesh(center, radius=0.045):
-    """Generate vertex/face arrays for a sphere at given center."""
+def _sphere_mesh_at_origin(radius=0.045):
+    """Generate vertex/face arrays for a sphere centered at the origin."""
     rows, cols = 6, 8
     verts, faces = [], []
     for i in range(rows + 1):
@@ -93,11 +93,7 @@ def _sphere_mesh(center, radius=0.045):
         r   = np.cos(lat)
         for j in range(cols):
             lon = 2 * np.pi * j / cols
-            verts.append([
-                center[0] + r * np.cos(lon) * radius,
-                center[1] + y * radius,
-                center[2] + r * np.sin(lon) * radius,
-            ])
+            verts.append([r * np.cos(lon) * radius, y * radius, r * np.sin(lon) * radius])
     for i in range(rows):
         for j in range(cols):
             p1 = i * cols + j
@@ -136,6 +132,19 @@ class HandSkeletonWidget(QWidget):
         self._scale       = SKELETON_DEFAULT_SCALE
         self._imu_scale   = SKELETON_DEFAULT_IMU_SCALE
         self._gl_ready    = False
+
+        # Sphere mesh cache — populated by _precompute_sphere_cache() after GL init.
+        # unit_sphere_verts[j] is a (N,3) array at origin for joint radius j.
+        # Per-frame update: positioned = unit_sphere_verts[j] + joint_pos (one vectorized add).
+        self._unit_sphere_verts: list  = []
+        self._sphere_faces             = None
+        self._sphere_colors: dict      = {}
+
+        # Render timer — drives _update_skeleton at 25 Hz, decoupled from 30 Hz data rate.
+        # on_frame() only stores values; this timer does the GL work.
+        self._render_timer = QTimer(self)
+        self._render_timer.setInterval(40)
+        self._render_timer.timeout.connect(self._update_skeleton)
 
         # Track camera state for manual buttons
         self._cam_distance  = 4.5
@@ -415,10 +424,36 @@ class HandSkeletonWidget(QWidget):
 
             self._build_gl()
             self._gl_ready = True
-            self._update_skeleton()
+            self._precompute_sphere_cache()
+            self._render_timer.start()
         except Exception as e:
             print(f"[HandSkeleton] GL init failed: {e}")
             print("  Run: pip install PyOpenGL PyOpenGL_accelerate --upgrade")
+
+    def _precompute_sphere_cache(self):
+        """
+        Pre-compute sphere vertex arrays centered at origin for each of the
+        4 joint radii.  Per-frame update is then a single vectorized numpy
+        add (unit_verts + joint_pos) instead of re-running Python loops.
+        Colors are constant per finger so they are pre-computed here too.
+        """
+        base_radii = [0.050, 0.042, 0.035, 0.028]
+        self._unit_sphere_verts = []
+        for r in base_radii:
+            verts, faces = _sphere_mesh_at_origin(r * self._scale)
+            self._unit_sphere_verts.append(verts)
+        _, self._sphere_faces = _sphere_mesh_at_origin(base_radii[0] * self._scale)
+
+        n_verts = len(self._unit_sphere_verts[0])
+        self._sphere_colors = {}
+        for ch in FINGER_CHANNELS:
+            rc, gc, bc = FINGER_COLORS[ch]
+            colors = np.ones((n_verts, 4), dtype=np.float32)
+            colors[:, 0] = rc / 255.0
+            colors[:, 1] = gc / 255.0
+            colors[:, 2] = bc / 255.0
+            colors[:, 3] = 0.95
+            self._sphere_colors[ch] = colors
 
     def _build_gl(self):
         """Create all GL line and sphere items for both hands."""
@@ -447,7 +482,7 @@ class HandSkeletonWidget(QWidget):
                     radius = (0.050 if j == 0 else
                               0.042 if j == 1 else
                               0.035 if j == 2 else 0.028)
-                    verts, faces = _sphere_mesh([0, 0, 0], radius)
+                    verts, faces = _sphere_mesh_at_origin(radius)
                     colors = np.ones((len(verts), 4), dtype=np.float32)
                     colors[:, 0] = r / 255.0
                     colors[:, 1] = g / 255.0
@@ -471,7 +506,7 @@ class HandSkeletonWidget(QWidget):
                 for item in self._joint_spheres[hand].get(ch, []):
                     self._view.removeItem(item)
         self._build_gl()
-        self._update_skeleton()
+        self._precompute_sphere_cache()
 
     def _set_vis(self, hand: str, visible: bool):
         for ch in FINGER_CHANNELS:
@@ -588,36 +623,26 @@ class HandSkeletonWidget(QWidget):
                             pos=np.array([a, b_pt], dtype=np.float32)
                         )
 
-                # Update joint spheres at new positions
-                radii = [0.050, 0.042, 0.035, 0.028]
+                # Update joint spheres — vectorized: one numpy add per joint,
+                # no Python loops, no per-frame array allocation for geometry.
                 for j, joint_pos in enumerate(joints):
-                    if j < len(spheres):
-                        verts, faces = _sphere_mesh(
-                            joint_pos,
-                            radius=radii[j] * self._scale
-                        )
-                        colors = np.ones((len(verts), 4), dtype=np.float32)
-                        colors[:, 0] = r / 255.0
-                        colors[:, 1] = g / 255.0
-                        colors[:, 2] = b / 255.0
-                        colors[:, 3] = 0.95
+                    if j < len(spheres) and self._unit_sphere_verts:
                         spheres[j].setMeshData(
-                            vertexes=verts, faces=faces,
-                            vertexColors=colors
+                            vertexes=self._unit_sphere_verts[j] + joint_pos,
+                            faces=self._sphere_faces,
+                            vertexColors=self._sphere_colors[ch],
                         )
 
     # ── Frame slot ────────────────────────────────────────────────────────────
 
     def on_frame(self, processed_frame: dict):
-        """Connected to processing_thread.frame_ready. Called 30 Hz."""
+        """Store latest sensor values. Rendering is driven by _render_timer at 25 Hz."""
         for hand in ['right', 'left']:
             for ch in FINGER_CHANNELS:
                 self._bend[hand][ch] = processed_frame[hand][ch]
             self._imu[hand]['pitch'] = processed_frame[hand]['pitch']
             self._imu[hand]['roll']  = processed_frame[hand]['roll']
             self._imu[hand]['yaw']   = processed_frame[hand]['yaw']
-        if self._gl_ready:
-            self._update_skeleton()
 
     # ── Tuning persistence ────────────────────────────────────────────────────
 
@@ -653,3 +678,20 @@ class HandSkeletonWidget(QWidget):
         self._imu_slider.setValue(int(self._imu_scale * 100))
         if self._gl_ready:
             self._update_skeleton()
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def initialize(self):
+        """
+        Start GL initialization. Called once when the Visualize tab is first
+        selected. Deferring to tab-show time guarantees the GLViewWidget surface
+        is fully visible before any GL context or item creation happens, which
+        avoids the black-viewport bug on Ubuntu + Mesa software rendering.
+        """
+        if not self._gl_ready:
+            QTimer.singleShot(100, self._init_gl)
+
+    def stop(self):
+        """Stop the render timer. Call from MainWindow.closeEvent."""
+        self._render_timer.stop()
+        self._gl_ready = False

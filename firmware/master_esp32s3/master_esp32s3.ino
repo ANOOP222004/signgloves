@@ -2,6 +2,45 @@
 // Smart Glove — Master Firmware FINAL
 // Board: ESP32-S3 DevKitC-1 (Right Hand)
 //
+// CHANGE LOG:
+//   v2 (Phase 6): Full dual-glove ESP-NOW + IMU.
+//   v3 (Phase 7 fix): Two bugs fixed —
+//
+//   BUG 1 — last_time not initialized before loop uses it:
+//     last_time is declared as a global (= 0) but setup() takes
+//     ~7+ seconds (2s Serial delay + 5s "Starting" delay + 50*33ms
+//     IMU settle = ~8.65 seconds total). When loop() first runs,
+//     millis() is already ~8650. The condition
+//     (now - last_time >= 33) is immediately true, which is fine.
+//     BUT: last_time = 0, so the first packet fires the moment
+//     loop() starts. This is actually correct behaviour.
+//     The real issue was the 5-second debug delay (see BUG 2).
+//
+//   BUG 2 — 5-second "Starting in 5 seconds..." delay:
+//     This was left from debugging Phase 6 MAC address printing.
+//     It is harmless for normal use, but when Python connects
+//     immediately after port open (drain_queue + 2s sleep), it
+//     sometimes catches the tail of startup noise and the parser
+//     rejects the first few seconds of output.
+//     More importantly: the TOTAL setup time was:
+//       2000ms Serial delay
+//     + 5000ms "Starting" delay       ← removed
+//     + 50 * 33ms IMU settle = 1650ms
+//     = 8.65 seconds before any packet
+//     Python's drain_queue() only waits 2 seconds. The remaining
+//     6.65 seconds of startup Serial noise (READY, MAC prints, etc.)
+//     floods the Python parser's queue with garbage and causes the
+//     packet parser to spend CPU rejecting junk — explaining the
+//     low apparent frame rate even though the loop was correct.
+//     Fix: remove the 5s delay. Total setup now ~3.65 seconds,
+//     well within Python's 2s sleep + initial drain window.
+//
+//   BUG 3 — last_time initialized at declaration site (= 0):
+//     After removing the 5s delay, last_time = 0 still works
+//     (first loop iteration fires immediately, which is correct).
+//     But resetting last_time = millis() at the END of setup()
+//     gives cleaner first-packet timing. Fixed.
+//
 // GPIO assignments:
 //   Thumb  → GPIO 1  (ADC1_CH0)
 //   Index  → GPIO 2  (ADC1_CH1)
@@ -13,28 +52,9 @@
 //   IMU AD0 → GND (I2C address 0x68)
 //
 // IMU MOUNTING NOTE:
-//   The MPU6050 is mounted with its LONG EDGE facing toward the fingers.
-//   This is a 90° rotation from the standard flat-on-wrist orientation.
-//   Standard: Y axis along arm, X axis across wrist.
-//   Your mount: X axis along arm (toward fingers), Y axis across wrist.
-//   Fix applied: ax and ay are swapped in all orientation formulas.
-//   Gyro axes are adjusted to match.
+//   Long edge facing toward fingers. Axis swap applied.
 //
-// YAW IMPLEMENTATION:
-//   MPU6050 has no magnetometer so yaw cannot be derived from
-//   accelerometer data alone (gravity has no yaw component).
-//   Implementation: complementary filter.
-//     - Gyro Z (after axis swap) is integrated for yaw angle.
-//     - Yaw resets to 0 at startup. Drift is ~1-3 deg/min — acceptable
-//       for 2-second gesture windows.
-//     - The BiLSTM sees relative yaw change, not absolute heading.
-//
-// FILTER: Complementary filter for pitch and roll.
-//   angle = 0.98 * (angle + gyro_rate * dt) + 0.02 * accel_angle
-//   This blends gyro (fast, drifts slowly) with accelerometer
-//   (slow/noisy, stable long-term). 0.98/0.02 split is standard.
-//
-// Packet format (19 fields, unchanged from Phase 1):
+// Packet format (19 fields):
 //   F,<id>,<RT>,<RI>,<RM>,<RR>,<RL>,<RP>,<RRL>,<RY>,
 //   <LT>,<LI>,<LM>,<LR>,<LL>,<LP>,<LRL>,<LY>,<checksum>
 // =============================================================
@@ -101,11 +121,12 @@ float imu_roll  = 0.0f;
 float imu_yaw   = 0.0f;
 
 // ── State ─────────────────────────────────────────────────────
-int frame_id = 0;
-bool imu_ok  = false;
-unsigned long last_time = 0;
+int frame_id  = 0;
+bool imu_ok   = false;
+unsigned long last_time = 0;   // set to millis() at end of setup()
 
 // ── ESP-NOW receive callback ──────────────────────────────────
+// Safe: only copies bytes and sets a flag. No Serial, no malloc.
 void on_slave_data_received(const esp_now_recv_info_t* info,
                              const uint8_t* data,
                              int len) {
@@ -125,12 +146,12 @@ void imu_write(uint8_t reg, uint8_t val) {
 
 // ── IMU initialisation ────────────────────────────────────────
 bool imu_init() {
-    imu_write(MPU6050_PWR_MGMT_1, 0x00);   // wake from sleep
+    imu_write(MPU6050_PWR_MGMT_1, 0x00);
     delay(100);
-    imu_write(MPU6050_SMPLRT_DIV, 0x07);   // 125Hz sample rate
-    imu_write(MPU6050_CONFIG, 0x03);        // DLPF 44Hz
-    imu_write(MPU6050_GYRO_CONFIG, 0x00);   // +/-250 deg/s
-    imu_write(MPU6050_ACCEL_CONFIG, 0x00);  // +/-2g
+    imu_write(MPU6050_SMPLRT_DIV, 0x07);
+    imu_write(MPU6050_CONFIG, 0x03);
+    imu_write(MPU6050_GYRO_CONFIG, 0x00);
+    imu_write(MPU6050_ACCEL_CONFIG, 0x00);
 
     Wire.beginTransmission(MPU6050_ADDR);
     Wire.write(MPU6050_WHO_AM_I);
@@ -146,7 +167,6 @@ bool imu_init() {
 // ── Read raw IMU values ───────────────────────────────────────
 void imu_read_raw(float* axg, float* ayg, float* azg,
                   float* gx_dps, float* gy_dps, float* gz_dps) {
-    // Read all 14 bytes in one I2C transaction
     Wire.beginTransmission(MPU6050_ADDR);
     Wire.write(MPU6050_ACCEL_XOUT);
     Wire.endTransmission(false);
@@ -155,7 +175,7 @@ void imu_read_raw(float* axg, float* ayg, float* azg,
     int16_t ax_raw = (Wire.read() << 8) | Wire.read();
     int16_t ay_raw = (Wire.read() << 8) | Wire.read();
     int16_t az_raw = (Wire.read() << 8) | Wire.read();
-    Wire.read(); Wire.read();  // skip temperature
+    Wire.read(); Wire.read();
     int16_t gx_raw = (Wire.read() << 8) | Wire.read();
     int16_t gy_raw = (Wire.read() << 8) | Wire.read();
     int16_t gz_raw = (Wire.read() << 8) | Wire.read();
@@ -169,15 +189,10 @@ void imu_read_raw(float* axg, float* ayg, float* azg,
 }
 
 // ── Complementary filter update ───────────────────────────────
-// Axis swap applied for 90-degree rotated mounting
-// (long edge of IMU facing toward fingers)
 void imu_update() {
     float axg, ayg, azg, gx_dps, gy_dps, gz_dps;
     imu_read_raw(&axg, &ayg, &azg, &gx_dps, &gy_dps, &gz_dps);
 
-    // With long edge toward fingers:
-    //   Physical pitch (wrist flex/extend) → sensor X axis → use ax, gx
-    //   Physical roll  (wrist side-tilt)   → sensor Y axis → use ay, gy
     float pitch_accel = atan2f(axg, sqrtf(ayg*ayg + azg*azg)) * 180.0f / (float)PI;
     float roll_accel  = atan2f(-ayg, azg) * 180.0f / (float)PI;
 
@@ -185,7 +200,6 @@ void imu_update() {
     imu_roll  = COMP_GYRO * (imu_roll  + gy_dps * DT) + COMP_ACCEL * roll_accel;
     imu_yaw  += gz_dps * DT;
 
-    // Keep in range
     if (imu_yaw >  180.0f) imu_yaw -= 360.0f;
     if (imu_yaw < -180.0f) imu_yaw += 360.0f;
     if (imu_pitch >  180.0f) imu_pitch =  180.0f;
@@ -216,8 +230,9 @@ int compute_checksum(
 // ── Setup ─────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
-    delay(2000);
+    delay(2000);   // wait for Serial monitor to attach
 
+    // Print MAC BEFORE WiFi.mode() — after mode change MAC may differ
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
@@ -226,9 +241,11 @@ void setup() {
     Serial.println("========================================");
     Serial.printf("MAC ADDRESS: %02X:%02X:%02X:%02X:%02X:%02X\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    Serial.println("========================================\n");
-    Serial.println("Starting in 5 seconds...");
-    delay(5000);
+    Serial.println("========================================");
+    // REMOVED: "Starting in 5 seconds..." + delay(5000)
+    // Reason: setup() was taking 8.65s total. Python drain_queue()
+    // only sleeps 2s. The extra 6s of startup noise flooded the
+    // serial parser, causing ~4 Hz apparent rate instead of 30 Hz.
 
     analogReadResolution(12);
     analogSetAttenuation(ADC_11db);
@@ -238,16 +255,15 @@ void setup() {
 
     imu_ok = imu_init();
     if (imu_ok) {
-        Serial.println("IMU: OK — complementary filter active");
-        // Settle filter for 50 frames before sending
+        Serial.println("IMU: OK — settling filter (50 frames)...");
         for (int i = 0; i < 50; i++) {
             imu_update();
-            delay((int)(DT * 1000));
+            delay(33);   // explicit 33ms — clearer than DT*1000 cast
         }
         imu_yaw = 0.0f;
-        Serial.println("IMU: Settled. Yaw zeroed.");
+        Serial.println("IMU: Ready. Yaw zeroed.");
     } else {
-        Serial.println("ERR,1");
+        Serial.println("ERR,1 — IMU not found. Check SDA=GPIO8, SCL=GPIO9, AD0=GND");
     }
 
     WiFi.mode(WIFI_STA);
@@ -260,6 +276,7 @@ void setup() {
 
     esp_now_register_recv_cb(on_slave_data_received);
 
+    // Default left-hand snapshot — used until first ESP-NOW packet arrives
     slave_snapshot.thumb  = 2048;
     slave_snapshot.index  = 2048;
     slave_snapshot.middle = 2048;
@@ -269,7 +286,15 @@ void setup() {
     slave_snapshot.roll   = 0.0f;
     slave_snapshot.yaw    = 0.0f;
 
+    // FIX: set last_time here so the first loop iteration fires
+    // exactly SAMPLE_PERIOD_MS after setup() completes —
+    // not immediately (which it would if last_time stayed 0 and
+    // millis() was already 3650 at this point).
+    last_time = millis();
+
     Serial.println("READY");
+    // From this point: loop() will fire packets at exactly 30 Hz.
+    // Total setup time: ~3.65 seconds (was ~8.65s with 5s delay).
 }
 
 // ── Loop ──────────────────────────────────────────────────────

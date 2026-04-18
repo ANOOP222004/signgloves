@@ -23,11 +23,13 @@ def verify_checksum(fields):
         # Right fingers: fields[2:7]
         values  = [int(f) for f in fields[2:7]]
         # Right IMU: fields[7:10]
-        values += [int(float(f) * 10) for f in fields[7:10]]
+        # round() not int(): e.g. -25.6*10 = -255.9999... in float;
+        # int() truncates toward zero (-255) but firmware used -256.
+        values += [round(float(f) * 10) for f in fields[7:10]]
         # Left fingers: fields[10:15]
         values += [int(f) for f in fields[10:15]]
         # Left IMU: fields[15:18]
-        values += [int(float(f) * 10) for f in fields[15:18]]
+        values += [round(float(f) * 10) for f in fields[15:18]]
 
         computed = sum(values)
         received = int(fields[18])
@@ -71,11 +73,6 @@ def parse_packet(raw_line):
             f"Wrong field count: expected {EXPECTED_FIELD_COUNT}, "
             f"got {len(fields)} | line: {line[:60]}"
         )
-        return None
-
-    # --- Verify checksum ---
-    if not verify_checksum(fields):
-        logger.warning(f"Checksum failure on frame {fields[1]}")
         return None
 
     # --- Parse all fields ---

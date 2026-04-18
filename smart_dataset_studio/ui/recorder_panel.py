@@ -43,7 +43,7 @@ from PyQt5.QtGui import QFont
 from recording.gesture_recorder import GestureRecorder
 from dataset.dataset_manager import DatasetManager
 from voice.voice_listener import VoiceListener
-from config import GESTURE_LABELS, WINDOW_SIZE
+from config import GESTURE_LABELS, WINDOW_SIZE, SPEED_TAGS, SPEED_ZONES, DEFAULT_SPEED
 
 
 class RecorderPanel(QGroupBox):
@@ -95,6 +95,9 @@ class RecorderPanel(QGroupBox):
         # None when recorder is not in COMPLETE state.
         self._pending_frames = None
 
+        # Currently selected recording speed — saved into every filename.
+        self._selected_speed = DEFAULT_SPEED
+
         # Tracks whether the VoiceListener thread is currently running.
         self._voice_active = False
 
@@ -122,6 +125,7 @@ class RecorderPanel(QGroupBox):
             QGroupBox ("Recorder")
             └── QVBoxLayout
                 ├── Label row:        "Label:" + QComboBox
+                ├── Speed selector:   SLOW / MEDIUM / FAST buttons + zone info
                 ├── Voice toggle:     🎤 Voice OFF / ON button
                 ├── Progress label:   "Ready" / "Frames: 12 / 60"
                 ├── Record button
@@ -142,6 +146,39 @@ class RecorderPanel(QGroupBox):
         self._label_combo.setMinimumHeight(28)
         label_row.addWidget(self._label_combo)
         layout.addLayout(label_row)
+
+        # ── Speed selector ────────────────────────────────────────────
+        # Three toggle buttons (SLOW / MEDIUM / FAST). Only one active at a
+        # time — like a radio group but styled to match the existing theme.
+        # The selected speed is embedded in the filename on every save.
+        speed_group = QGroupBox("Recording Speed")
+        speed_vbox  = QVBoxLayout(speed_group)
+        speed_vbox.setSpacing(4)
+
+        speed_btn_row = QHBoxLayout()
+        speed_btn_row.setSpacing(4)
+        self._speed_btns = {}
+        for speed in SPEED_TAGS:
+            btn = QPushButton(speed.upper())
+            btn.setCheckable(True)
+            btn.setMinimumHeight(28)
+            btn.setFont(QFont("Courier", 9, QFont.Bold))
+            btn.clicked.connect(lambda _checked, s=speed: self._on_speed_selected(s))
+            self._speed_btns[speed] = btn
+            speed_btn_row.addWidget(btn)
+        speed_vbox.addLayout(speed_btn_row)
+
+        # Small text showing frame zone ranges for the selected speed
+        self._zone_label = QLabel()
+        self._zone_label.setAlignment(Qt.AlignCenter)
+        self._zone_label.setFont(QFont("Courier", 8))
+        self._zone_label.setStyleSheet("color: #5A6A5A;")
+        speed_vbox.addWidget(self._zone_label)
+
+        layout.addWidget(speed_group)
+
+        # Set default speed visually
+        self._on_speed_selected(DEFAULT_SPEED)
 
         # ── Voice toggle button ───────────────────────────────────────
         # Clicking starts or stops the VoiceListener background thread.
@@ -217,6 +254,31 @@ class RecorderPanel(QGroupBox):
         layout.addWidget(self._status_label)
 
         layout.addStretch()
+
+    # ── Speed selector ───────────────────────────────────────────────
+
+    def _on_speed_selected(self, speed: str):
+        """Update selected speed, highlight the active button, update zone text."""
+        self._selected_speed = speed
+
+        # Highlight active button; dim others
+        _active_css = (
+            "QPushButton { background-color: #1A3A2A; color: #00E676; "
+            "font-weight: bold; border: 1px solid #00E676; border-radius: 4px; }"
+        )
+        _inactive_css = ""
+        for s, btn in self._speed_btns.items():
+            btn.setChecked(s == speed)
+            btn.setStyleSheet(_active_css if s == speed else _inactive_css)
+
+        # Update zone info text below the buttons
+        zones = SPEED_ZONES[speed]
+        s_s, s_e = zones['start']
+        t_s, t_e = zones['transition']
+        e_s, e_e = zones['end']
+        self._zone_label.setText(
+            f"Start: {s_s}-{s_e}  |  Transition: {t_s}-{t_e}  |  End: {e_s}-{e_e}"
+        )
 
     # ── Voice toggle ──────────────────────────────────────────────────
 
@@ -335,6 +397,8 @@ class RecorderPanel(QGroupBox):
         self._save_discard_widget.setVisible(False)
         self._progress_label.setText("Ready")
         self._progress_label.setStyleSheet("color: gray;")
+        for btn in self._speed_btns.values():
+            btn.setEnabled(True)
 
     def _set_state_capturing(self):
         """UI state: actively collecting frames."""
@@ -344,6 +408,9 @@ class RecorderPanel(QGroupBox):
         self._save_discard_widget.setVisible(False)
         self._progress_label.setText(f"Frames: 0 / {WINDOW_SIZE}")
         self._progress_label.setStyleSheet("color: blue;")
+        # Lock speed during capture — changing it mid-recording would corrupt the filename
+        for btn in self._speed_btns.values():
+            btn.setEnabled(False)
 
     def _set_state_complete(self):
         """UI state: 60 frames collected — waiting for Save or Discard."""
@@ -353,6 +420,8 @@ class RecorderPanel(QGroupBox):
         self._save_discard_widget.setVisible(True)
         self._progress_label.setText(f"Complete! ({WINDOW_SIZE} frames)")
         self._progress_label.setStyleSheet("color: green; font-weight: bold;")
+        for btn in self._speed_btns.values():
+            btn.setEnabled(False)
 
     def _set_state_failed(self, reason: str):
         """UI state: recording aborted — show reason, return to idle controls."""
@@ -364,6 +433,8 @@ class RecorderPanel(QGroupBox):
         self._progress_label.setStyleSheet("color: red;")
         self._status_label.setText(reason)
         self._status_label.setStyleSheet("color: red;")
+        for btn in self._speed_btns.values():
+            btn.setEnabled(True)
 
     # ── Button click handlers ─────────────────────────────────────────
 
@@ -387,7 +458,7 @@ class RecorderPanel(QGroupBox):
         label = self._label_combo.currentText()
 
         try:
-            filepath = self.dm.save_sample(label, self._pending_frames)
+            filepath = self.dm.save_sample(label, self._pending_frames, speed=self._selected_speed)
         except Exception as e:
             self._status_label.setText(f"Save failed: {e}")
             self._status_label.setStyleSheet("color: red;")

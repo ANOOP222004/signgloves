@@ -2,17 +2,21 @@
 // Smart Glove — Slave Firmware FINAL WITH IMU
 // Board: ESP32 DevKit V1 (Left Hand)
 //
-// WHAT CHANGED FROM PREVIOUS VERSION:
-//   Previous version had no IMU code at all — pitch/roll/yaw
-//   were hardcoded to 0.0. Now has full MPU6050 support with
-//   the same complementary filter as master.
+// CHANGE LOG:
+//   v2 (Phase 6): Added IMU support with complementary filter.
+//   v3 (Phase 7 fix): Removed Serial.println() from ESP-NOW send
+//     callback. Calling Serial from a WiFi task callback context
+//     can cause watchdog resets and erratic timing on some ESP32
+//     Arduino core versions. The send callback runs at high priority
+//     in a WiFi task — blocking it with Serial I/O delays the loop.
+//     Replaced with a volatile flag checked in loop() instead.
 //
 // GPIO assignments (Hall sensors):
 //   Thumb  → GPIO 32
 //   Index  → GPIO 33
 //   Middle → GPIO 34
 //   Ring   → GPIO 35
-//   Little → GPIO 36 (VP) instood of 25
+//   Little → GPIO 36 (VP)
 //
 // GPIO assignments (IMU):
 //   SDA → GPIO 21  (standard ESP32 DevKit V1 I2C SDA pin)
@@ -21,11 +25,10 @@
 //   4.7k pull-up resistors on SDA and SCL to 3V3
 //
 // IMU MOUNTING:
-//   Same mounting as master — long edge facing toward fingers.
-//   Same axis swap applied (ax and ay swapped in formulas).
-//   Same gx/gy swap for gyro rates.
+//   Long edge facing toward fingers.
+//   Axis swap applied (ax and ay swapped in formulas).
 //
-// MASTER MAC: update MASTER_MAC if you replaced the master chip.
+// MASTER MAC: update MASTER_MAC if master chip was replaced.
 // =============================================================
 
 #include <esp_now.h>
@@ -42,8 +45,6 @@
 #define PIN_LITTLE  36
 
 // ── IMU I2C pins ──────────────────────────────────────────────
-// GPIO 21 and 22 are the standard hardware I2C pins on ESP32 DevKit V1.
-// Do NOT use GPIO 8/9 — those are the ESP32-S3 master pins.
 #define IMU_SDA     21
 #define IMU_SCL     22
 
@@ -58,20 +59,19 @@
 #define MPU6050_WHO_AM_I     0x75
 
 // ── IMU sensitivity ───────────────────────────────────────────
-#define ACCEL_SCALE  16384.0f   // +/-2g  = 16384 LSB/g
-#define GYRO_SCALE   131.0f     // +/-250 deg/s = 131 LSB/(deg/s)
+#define ACCEL_SCALE  16384.0f
+#define GYRO_SCALE   131.0f
 
 // ── Timing ───────────────────────────────────────────────────
 #define SAMPLE_PERIOD_MS  33    // 30 Hz
-#define DT  (SAMPLE_PERIOD_MS / 1000.0f)  // 0.033 seconds
+#define DT  (SAMPLE_PERIOD_MS / 1000.0f)
 
 // ── Complementary filter ──────────────────────────────────────
 #define COMP_GYRO   0.98f
 #define COMP_ACCEL  0.02f
 
 // ── Master MAC address ────────────────────────────────────────
-// Update this if master chip was ever replaced.
-// Get correct MAC by opening Serial Monitor on master at startup.
+// Get correct MAC from master Serial Monitor at startup.
 uint8_t MASTER_MAC[6] = {0x3C, 0x0F, 0x02, 0xD6, 0x46, 0xE8};
 
 // ── ESP-NOW payload — must match master struct exactly ────────
@@ -94,11 +94,21 @@ float imu_roll  = 0.0f;
 float imu_yaw   = 0.0f;
 bool  imu_ok    = false;
 
+// ── Send failure counter (volatile — written from callback) ───
+// We track failures with a counter instead of printing from the
+// callback. The loop() prints a warning every 100 failures.
+// This avoids Serial I/O inside a high-priority WiFi task.
+volatile uint32_t send_fail_count = 0;
+uint32_t last_reported_fails = 0;
+
 // ── ESP-NOW send callback ─────────────────────────────────────
-// Cast required for newer ESP32 Arduino core versions.
+// IMPORTANT: Do NOT call Serial.print() here.
+// This runs in a WiFi task context at high priority.
+// Any blocking call here delays the WiFi stack and degrades
+// the loop timing on the main core.
 void on_data_sent(const uint8_t* mac_addr, esp_now_send_status_t status) {
     if (status != ESP_NOW_SEND_SUCCESS) {
-        Serial.println("WARNING: ESP-NOW send failed");
+        send_fail_count++;
     }
 }
 
@@ -112,14 +122,13 @@ void imu_write(uint8_t reg, uint8_t val) {
 
 // ── IMU initialisation ────────────────────────────────────────
 bool imu_init() {
-    imu_write(MPU6050_PWR_MGMT_1, 0x00);   // wake from sleep
+    imu_write(MPU6050_PWR_MGMT_1, 0x00);
     delay(100);
-    imu_write(MPU6050_SMPLRT_DIV, 0x07);   // 125 Hz internal sample rate
-    imu_write(MPU6050_CONFIG, 0x03);        // DLPF bandwidth 44 Hz
-    imu_write(MPU6050_GYRO_CONFIG, 0x00);   // +/-250 deg/s full scale
-    imu_write(MPU6050_ACCEL_CONFIG, 0x00);  // +/-2g full scale
+    imu_write(MPU6050_SMPLRT_DIV, 0x07);
+    imu_write(MPU6050_CONFIG, 0x03);
+    imu_write(MPU6050_GYRO_CONFIG, 0x00);
+    imu_write(MPU6050_ACCEL_CONFIG, 0x00);
 
-    // Verify WHO_AM_I — MPU6050 returns 0x68
     Wire.beginTransmission(MPU6050_ADDR);
     Wire.write(MPU6050_WHO_AM_I);
     Wire.endTransmission(false);
@@ -134,7 +143,6 @@ bool imu_init() {
 // ── Read raw IMU values ───────────────────────────────────────
 void imu_read_raw(float* axg, float* ayg, float* azg,
                   float* gx_dps, float* gy_dps, float* gz_dps) {
-    // Read all 14 bytes in one transaction: accel(6) + temp(2) + gyro(6)
     Wire.beginTransmission(MPU6050_ADDR);
     Wire.write(MPU6050_ACCEL_XOUT);
     Wire.endTransmission(false);
@@ -143,7 +151,7 @@ void imu_read_raw(float* axg, float* ayg, float* azg,
     int16_t ax_raw = (Wire.read() << 8) | Wire.read();
     int16_t ay_raw = (Wire.read() << 8) | Wire.read();
     int16_t az_raw = (Wire.read() << 8) | Wire.read();
-    Wire.read(); Wire.read();  // skip temperature bytes
+    Wire.read(); Wire.read();
     int16_t gx_raw = (Wire.read() << 8) | Wire.read();
     int16_t gy_raw = (Wire.read() << 8) | Wire.read();
     int16_t gz_raw = (Wire.read() << 8) | Wire.read();
@@ -157,29 +165,19 @@ void imu_read_raw(float* axg, float* ayg, float* azg,
 }
 
 // ── Complementary filter update ───────────────────────────────
-// Axis swap for 90-degree rotated mounting (long edge toward fingers).
-// Identical logic to master — same physical mounting on both hands.
 void imu_update() {
     float axg, ayg, azg, gx_dps, gy_dps, gz_dps;
     imu_read_raw(&axg, &ayg, &azg, &gx_dps, &gy_dps, &gz_dps);
 
-    // Axis swap: long edge toward fingers means physical pitch
-    // is captured on sensor X axis, physical roll on sensor Y axis.
     float pitch_accel = atan2f(axg, sqrtf(ayg*ayg + azg*azg)) * 180.0f / (float)PI;
     float roll_accel  = atan2f(-ayg, azg) * 180.0f / (float)PI;
 
-    // Complementary filter — 98% gyro, 2% accel
     imu_pitch = COMP_GYRO * (imu_pitch + gx_dps * DT) + COMP_ACCEL * pitch_accel;
     imu_roll  = COMP_GYRO * (imu_roll  + gy_dps * DT) + COMP_ACCEL * roll_accel;
+    imu_yaw  += gz_dps * DT;
 
-    // Yaw from gyro Z integration (Z axis unchanged by horizontal rotation)
-    imu_yaw += gz_dps * DT;
-
-    // Keep yaw in -180 to +180 range
     if (imu_yaw >  180.0f) imu_yaw -= 360.0f;
     if (imu_yaw < -180.0f) imu_yaw += 360.0f;
-
-    // Clamp pitch and roll
     if (imu_pitch >  180.0f) imu_pitch =  180.0f;
     if (imu_pitch < -180.0f) imu_pitch = -180.0f;
     if (imu_roll  >  180.0f) imu_roll  =  180.0f;
@@ -195,29 +193,23 @@ void setup() {
     Serial.println("SMART GLOVE — SLAVE ESP32 WITH IMU");
     Serial.println("========================================");
 
-    // Print slave MAC
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     Serial.printf("SLAVE MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    // ADC
     analogReadResolution(12);
     analogSetAttenuation(ADC_11db);
 
-    // I2C for IMU — using GPIO 21 (SDA) and 22 (SCL)
-    // These are the standard hardware I2C pins on ESP32 DevKit V1
     Wire.begin(IMU_SDA, IMU_SCL);
-    Wire.setClock(400000);  // 400 kHz fast mode
+    Wire.setClock(400000);
 
-    // IMU init
     imu_ok = imu_init();
     if (imu_ok) {
         Serial.println("IMU: OK — complementary filter active");
-        // Settle filter for 50 frames before starting
         for (int i = 0; i < 50; i++) {
             imu_update();
-            delay((int)(DT * 1000));
+            delay(33);
         }
         imu_yaw = 0.0f;
         Serial.println("IMU: Settled. Yaw zeroed.");
@@ -226,11 +218,9 @@ void setup() {
         Serial.println("IMU: Sending 0.0 for pitch/roll/yaw");
     }
 
-    // WiFi station mode for ESP-NOW
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
 
-    // Guard: halt if MASTER_MAC is all zeros
     bool mac_is_zero = true;
     for (int i = 0; i < 6; i++) {
         if (MASTER_MAC[i] != 0x00) { mac_is_zero = false; break; }
@@ -240,16 +230,13 @@ void setup() {
         while (true) { delay(1000); }
     }
 
-    // ESP-NOW init
     if (esp_now_init() != ESP_OK) {
         Serial.println("ERROR: ESP-NOW init failed — halting");
         while (true) { delay(1000); }
     }
 
-    // Register callback with cast for newer Arduino core compatibility
     esp_now_register_send_cb((esp_now_send_cb_t)on_data_sent);
 
-    // Register master as peer
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, MASTER_MAC, 6);
     peer.channel = 0;
@@ -273,25 +260,28 @@ void loop() {
     if (now - last_time >= SAMPLE_PERIOD_MS) {
         last_time = now;
 
-        // Update IMU filter every frame for accurate gyro integration
         if (imu_ok) {
             imu_update();
         }
 
-        // Read Hall sensors
         payload.thumb  = analogRead(PIN_THUMB);
         payload.index  = analogRead(PIN_INDEX);
         payload.middle = analogRead(PIN_MIDDLE);
         payload.ring   = analogRead(PIN_RING);
         payload.little = analogRead(PIN_LITTLE);
 
-        // IMU values from complementary filter
-        // If IMU failed, sends 0.0 (safe fallback)
         payload.pitch = imu_ok ? imu_pitch : 0.0f;
         payload.roll  = imu_ok ? imu_roll  : 0.0f;
         payload.yaw   = imu_ok ? imu_yaw   : 0.0f;
 
-        // Send to master via ESP-NOW
         esp_now_send(MASTER_MAC, (uint8_t*)&payload, sizeof(payload));
+
+        // Report cumulative ESP-NOW send failures in loop (safe context)
+        // Prints only when new failures have occurred since last check.
+        if (send_fail_count != last_reported_fails) {
+            Serial.print("WARNING: ESP-NOW send failures total: ");
+            Serial.println(send_fail_count);
+            last_reported_fails = send_fail_count;
+        }
     }
 }

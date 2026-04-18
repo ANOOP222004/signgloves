@@ -1,23 +1,25 @@
 # ui/main_window.py
-# Phase 6 — complete file
-# Replace your entire existing ui/main_window.py with this file.
+# Phase 7 — DATASET tab now live (AnalysisTab replaces stub)
 #
-# Changes from Phase 5:
-#   - HandSkeletonWidget imported and added to Visualize tab
-#   - self.skeleton_widget exposed as public attribute for signal wiring
-#   - Visualize tab is now real (not a stub)
+# Changes from Phase 6:
+#   - AnalysisTab imported and added to Dataset tab
+#   - self.analysis_tab exposed as public attribute
+#   - _build_dataset_stub() removed (AnalysisTab is the real widget now)
+#   - dataset_manager passed to MainWindow so AnalysisTab can use it
+#   - MainWindow.__init__ signature updated: dataset_manager param added
 
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QGroupBox, QTabWidget,
 )
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QEvent, QTimer, Qt
 from PyQt5.QtGui import QFont
 
 from config import FINGER_CHANNELS, IMU_CHANNELS
 from ui.recorder_panel import RecorderPanel
 from ui.dataset_panel import DatasetPanel
 from ui.calibration_tab import CalibrationTab
+from ui.analysis_tab import AnalysisTab
 from ui.style import bend_color
 from visualization.signal_plot import SignalPlotWidget
 from visualization.hand_skeleton import HandSkeletonWidget
@@ -38,29 +40,33 @@ IMU_DISPLAY_NAMES = {
 
 class MainWindow(QMainWindow):
     """
-    Main application window — Phase 6 tabbed layout.
+    Main application window — Phase 7 tabbed layout.
 
     Six tabs:
         📊 Dashboard   — live sensor value labels, color-coded by bend
         ⏺  Record      — RecorderPanel + DatasetPanel + SignalPlotWidget
-        🖐  Visualize   — HandSkeletonWidget + tuning sliders (Phase 6 — LIVE)
+        🖐  Visualize   — HandSkeletonWidget + tuning sliders (Phase 6)
         ⚙  Calibration — CalibrationTab (inline, always accessible)
-        📁  Dataset     — stub for Phase 7 analysis tools
+        📁  Dataset     — AnalysisTab — Phase 7 LIVE (was stub in Phase 6)
         🚀  Export      — stub for Phase 8 ML export
 
     Public attributes wired in main.py:
-        self.plot_widget      — SignalPlotWidget  (Record tab)
-        self.calibration_tab  — CalibrationTab   (Calibration tab)
+        self.plot_widget      — SignalPlotWidget   (Record tab)
+        self.calibration_tab  — CalibrationTab    (Calibration tab)
         self.skeleton_widget  — HandSkeletonWidget (Visualize tab)
+        self.analysis_tab     — AnalysisTab        (Dataset tab) ← NEW Phase 7
     """
 
-    def __init__(self, recorder_panel=None, dataset_panel=None):
+    def __init__(self, recorder_panel=None, dataset_panel=None, dataset_manager=None):
         super().__init__()
 
         self.setWindowTitle("Smart Glove Dataset Studio")
         self.setMinimumSize(1000, 720)
 
-        # FPS counter — counts frames received per second
+        self._dataset_manager      = dataset_manager   # stored for AnalysisTab
+        self._skeleton_initialized = False             # lazy GL init on first tab select
+
+        # FPS counter
         self._frame_count = 0
         self._fps_timer = QTimer()
         self._fps_timer.setInterval(1000)
@@ -69,7 +75,6 @@ class MainWindow(QMainWindow):
 
         self._build_ui(recorder_panel, dataset_panel)
 
-        # Status bar — always visible regardless of active tab
         self._fps_label = QLabel("0 Hz")
         self._fps_label.setAlignment(Qt.AlignRight)
         self.statusBar().addPermanentWidget(self._fps_label)
@@ -87,30 +92,35 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
+        tabs.currentChanged.connect(self._on_tab_changed)
 
         # Tab 0 — Dashboard
         tabs.addTab(self._build_dashboard_tab(), "📊  DASHBOARD")
 
         # Tab 1 — Record
-        # plot_widget created here, accessed via self.plot_widget in main.py
         self.plot_widget = SignalPlotWidget()
         tabs.addTab(
             self._build_record_tab(recorder_panel, dataset_panel),
             "⏺  RECORD"
         )
 
-        # Tab 2 — Visualize (Phase 6 — now real, not a stub)
-        # skeleton_widget created here, accessed via self.skeleton_widget in main.py
+        # Tab 2 — Visualize
         self.skeleton_widget = HandSkeletonWidget()
         tabs.addTab(self.skeleton_widget, "🖐  VISUALIZE")
 
         # Tab 3 — Calibration
-        # calibration_tab created here, accessed via self.calibration_tab in main.py
         self.calibration_tab = CalibrationTab()
         tabs.addTab(self.calibration_tab, "⚙  CALIBRATION")
 
-        # Tab 4 — Dataset Analysis (Phase 7 stub)
-        tabs.addTab(self._build_dataset_stub(), "📁  DATASET")
+        # Tab 4 — Dataset Analysis — Phase 7 LIVE
+        # Requires dataset_manager to access the dataset path and delete files.
+        # Falls back to a placeholder if not provided (shouldn't happen in normal use).
+        if self._dataset_manager is not None:
+            self.analysis_tab = AnalysisTab(self._dataset_manager)
+            tabs.addTab(self.analysis_tab, "📁  DATASET")
+        else:
+            self.analysis_tab = None
+            tabs.addTab(self._build_stub("DATASET_ANALYSIS", "dataset_manager not provided"), "📁  DATASET")
 
         # Tab 5 — ML Export (Phase 8 stub)
         tabs.addTab(self._build_export_stub(), "🚀  EXPORT")
@@ -133,44 +143,21 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
-        # Top row: recorder controls (left) + dataset counts (right)
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
         top_row.addWidget(
             recorder_panel if recorder_panel
-            else self._stub("RECORDER", "RecorderPanel not provided"),
+            else self._build_stub("RECORDER", "RecorderPanel not provided"),
             stretch=1
         )
         top_row.addWidget(
             dataset_panel if dataset_panel
-            else self._stub("DATASET", "DatasetPanel not provided"),
+            else self._build_stub("DATASET", "DatasetPanel not provided"),
             stretch=1
         )
 
-        # Bottom: signal plots take remaining space
         layout.addLayout(top_row, stretch=0)
         layout.addWidget(self.plot_widget, stretch=2)
-        return page
-
-    def _build_dataset_stub(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(10, 10, 10, 10)
-        group = QGroupBox("DATASET_ANALYSIS")
-        g_layout = QVBoxLayout(group)
-        msg = QLabel(
-            "PHASE_07  //  DATASET ANALYSIS TOOLS\n\n"
-            "Will include:\n"
-            "  >  Per-gesture signal overlay plots\n"
-            "  >  Outlier detection\n"
-            "  >  Dataset statistics  (mean, std per feature)\n"
-            "  >  Sample count balance chart"
-        )
-        msg.setAlignment(Qt.AlignCenter)
-        msg.setStyleSheet("color: #5A6A5A;")
-        msg.setFont(QFont("Courier New", 10))
-        g_layout.addWidget(msg)
-        layout.addWidget(group)
         return page
 
     def _build_export_stub(self) -> QWidget:
@@ -195,14 +182,18 @@ class MainWindow(QMainWindow):
         layout.addWidget(group)
         return page
 
-    # ── Sensor panel (Dashboard tab) ──────────────────────────────────────────
+    def _build_stub(self, title: str, msg_text: str) -> QGroupBox:
+        g = QGroupBox(title)
+        l = QVBoxLayout(g)
+        msg = QLabel(msg_text)
+        msg.setAlignment(Qt.AlignCenter)
+        msg.setStyleSheet("color: #5A6A5A;")
+        l.addWidget(msg)
+        return g
+
+    # ── Sensor panel (Dashboard) ──────────────────────────────────────────────
 
     def _build_sensor_panel(self) -> QGroupBox:
-        """
-        Live sensor value display — all 16 channels.
-        Finger labels are color-coded by bend_color() in on_frame_ready().
-        Uses monospace font to prevent UI jitter from label resizing at 30 Hz.
-        """
         group = QGroupBox("SENSOR_VALUES")
         outer = QHBoxLayout(group)
         outer.setSpacing(16)
@@ -219,11 +210,8 @@ class MainWindow(QMainWindow):
             hl  = QVBoxLayout(hg)
             hl.setSpacing(6)
 
-            # Finger section header
             bend_header = QLabel("FINGER_BEND  (0.0 - 1.0)")
-            bend_header.setStyleSheet(
-                "color: #5A6A5A; font-size: 9px; letter-spacing: 1px;"
-            )
+            bend_header.setStyleSheet("color: #5A6A5A; font-size: 9px; letter-spacing: 1px;")
             hl.addWidget(bend_header)
 
             for ch in FINGER_CHANNELS:
@@ -234,19 +222,14 @@ class MainWindow(QMainWindow):
                 vl  = QLabel("0.00")
                 vl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 vl.setMinimumWidth(55)
-                # Monospace: prevents label resizing causing UI jitter at 30 Hz
                 vl.setFont(QFont("Courier New", 11))
                 self._finger_labels[hand][ch] = vl
                 row.addWidget(nl)
                 row.addWidget(vl)
                 hl.addLayout(row)
 
-            # IMU section header
             imu_header = QLabel("WRIST_ORIENTATION  (DEG)")
-            imu_header.setStyleSheet(
-                "color: #5A6A5A; font-size: 9px; letter-spacing: 1px; "
-                "margin-top: 6px;"
-            )
+            imu_header.setStyleSheet("color: #5A6A5A; font-size: 9px; letter-spacing: 1px; margin-top: 6px;")
             hl.addWidget(imu_header)
 
             for ch in IMU_CHANNELS:
@@ -268,30 +251,14 @@ class MainWindow(QMainWindow):
 
         return group
 
-    def _stub(self, title: str, msg: str) -> QGroupBox:
-        """Placeholder panel used when a panel object is not provided."""
-        g = QGroupBox(title)
-        l = QVBoxLayout(g)
-        lbl = QLabel(msg)
-        lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("color: #5A6A5A;")
-        l.addWidget(lbl)
-        return g
-
     # ── Public slots ──────────────────────────────────────────────────────────
 
     def on_frame_ready(self, processed_frame: dict):
-        """
-        Connected to processing_thread.frame_ready.
-        Called 30 Hz on the main thread.
-        Updates all 16 sensor value labels with color coding.
-        """
         for hand in ['right', 'left']:
             for ch in FINGER_CHANNELS:
                 value = processed_frame[hand][ch]
                 label = self._finger_labels[hand][ch]
                 label.setText(f"{value:.2f}")
-                # bend_color: gray→blue→yellow→green as bend increases
                 label.setStyleSheet(f"color: {bend_color(value)};")
             for ch in IMU_CHANNELS:
                 self._imu_labels[hand][ch].setText(
@@ -300,21 +267,36 @@ class MainWindow(QMainWindow):
         self._frame_count += 1
 
     def on_status_message(self, message: str):
-        """Connected to processing_thread.status_message."""
         self.statusBar().showMessage(message)
 
     def set_connected(self, connected: bool):
-        """Called from main.py after serial thread starts."""
         msg = "STATUS: CONNECTED" if connected else "STATUS: DISCONNECTED"
         self.statusBar().showMessage(msg)
 
+    def _on_tab_changed(self, index: int):
+        # Visualize tab is index 2. Initialize GL only on first select so the
+        # GLViewWidget surface is fully visible before any GL context is created.
+        if index == 2 and not self._skeleton_initialized:
+            self._skeleton_initialized = True
+            self.skeleton_widget.initialize()
+
+    def changeEvent(self, event):
+        # On Ubuntu GNOME + xcb_egl, the title-bar maximize button sometimes
+        # triggers WindowFullScreen instead of WindowMaximized. In fullscreen
+        # mode the xcb_egl compositor makes the window invisible. Intercept the
+        # fullscreen state and convert it to maximize, which composites correctly.
+        if event.type() == QEvent.WindowStateChange:
+            if self.windowState() & Qt.WindowFullScreen:
+                QTimer.singleShot(0, self.showMaximized)
+                return
+        super().changeEvent(event)
+
     def closeEvent(self, event):
-        """Stop the plot timer when window closes to prevent timer firing on dead widget."""
+        self.skeleton_widget.stop()
         self.plot_widget.stop()
         super().closeEvent(event)
 
     def _update_fps(self):
-        """Called every 1 second by _fps_timer. Shows live frame rate."""
         fps = self._frame_count
         self._frame_count = 0
         self._fps_label.setText(f"RATE: {fps} Hz")
