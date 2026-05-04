@@ -8,6 +8,8 @@
 #   - dataset_manager passed to MainWindow so AnalysisTab can use it
 #   - MainWindow.__init__ signature updated: dataset_manager param added
 
+import time
+
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QGroupBox, QTabWidget,
@@ -15,11 +17,12 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QEvent, QTimer, Qt
 from PyQt5.QtGui import QFont
 
-from config import FINGER_CHANNELS, IMU_CHANNELS
+from config import FINGER_CHANNELS, IMU_CHANNELS, VOICE_TAB_COMMANDS
 from ui.recorder_panel import RecorderPanel
 from ui.dataset_panel import DatasetPanel
 from ui.calibration_tab import CalibrationTab
 from ui.analysis_tab import AnalysisTab
+from ui.export_tab import ExportTab
 from ui.style import bend_color
 from visualization.signal_plot import SignalPlotWidget
 from visualization.hand_skeleton import HandSkeletonWidget
@@ -61,7 +64,12 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("Smart Glove Dataset Studio")
-        self.setMinimumSize(1000, 720)
+        # Minimum well below 1366x768 so mutter has real room to maximize into.
+        # Previously 1000x720 left only ~21 px of vertical slack on a 1290x741
+        # available screen, so GNOME mutter rejected the maximize state and
+        # hid the title-bar maximize button entirely.
+        self.setMinimumSize(800, 600)
+        self.resize(1200, 720)
 
         self._dataset_manager      = dataset_manager   # stored for AnalysisTab
         self._skeleton_initialized = False             # lazy GL init on first tab select
@@ -72,6 +80,13 @@ class MainWindow(QMainWindow):
         self._fps_timer.setInterval(1000)
         self._fps_timer.timeout.connect(self._update_fps)
         self._fps_timer.start()
+
+        # Session stats — running totals since app launch
+        self._session_start       = time.monotonic()
+        self._frames_received     = 0
+        self._total_drops         = 0
+        self._last_gesture_label  = None
+        self._last_gesture_at     = None  # monotonic timestamp
 
         self._build_ui(recorder_panel, dataset_panel)
 
@@ -90,9 +105,10 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        tabs = QTabWidget()
-        tabs.setDocumentMode(True)
-        tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        tabs = self.tabs   # keep local alias so existing addTab() calls below work unchanged
 
         # Tab 0 — Dashboard
         tabs.addTab(self._build_dashboard_tab(), "📊  DASHBOARD")
@@ -122,8 +138,13 @@ class MainWindow(QMainWindow):
             self.analysis_tab = None
             tabs.addTab(self._build_stub("DATASET_ANALYSIS", "dataset_manager not provided"), "📁  DATASET")
 
-        # Tab 5 — ML Export (Phase 8 stub)
-        tabs.addTab(self._build_export_stub(), "🚀  EXPORT")
+        # Tab 5 — ML Export (Phase 8)
+        if self._dataset_manager is not None:
+            self.export_tab = ExportTab(self._dataset_manager)
+            tabs.addTab(self.export_tab, "🚀  EXPORT")
+        else:
+            self.export_tab = None
+            tabs.addTab(self._build_stub("EXPORT", "dataset_manager not provided"), "🚀  EXPORT")
 
         root.addWidget(tabs)
 
@@ -133,7 +154,9 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
         layout.addWidget(self._build_sensor_panel())
+        layout.addWidget(self._build_session_stats_panel())
         layout.addStretch()
         return page
 
@@ -158,28 +181,6 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(top_row, stretch=0)
         layout.addWidget(self.plot_widget, stretch=2)
-        return page
-
-    def _build_export_stub(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(10, 10, 10, 10)
-        group = QGroupBox("EXPORT_ENGINE")
-        g_layout = QVBoxLayout(group)
-        msg = QLabel(
-            "PHASE_08  //  ML EXPORT SYSTEM\n\n"
-            "Will include:\n"
-            "  >  dataset.npy      shape: (N, 60, 16)\n"
-            "  >  labels.npy       shape: (N,)\n"
-            "  >  label_map.json   { HELLO: 0, STOP: 1, ... }\n"
-            "  >  Flat CSV with label column\n"
-            "  >  TensorFlow Dataset format"
-        )
-        msg.setAlignment(Qt.AlignCenter)
-        msg.setStyleSheet("color: #5A6A5A;")
-        msg.setFont(QFont("Courier New", 10))
-        g_layout.addWidget(msg)
-        layout.addWidget(group)
         return page
 
     def _build_stub(self, title: str, msg_text: str) -> QGroupBox:
@@ -251,6 +252,39 @@ class MainWindow(QMainWindow):
 
         return group
 
+    # ── Session stats panel (Dashboard) ───────────────────────────────────────
+
+    def _build_session_stats_panel(self) -> QGroupBox:
+        group = QGroupBox("SESSION_STATS")
+        outer = QHBoxLayout(group)
+        outer.setSpacing(16)
+
+        rows = [
+            ('uptime',   'UPTIME',      '00:00:00'),
+            ('frames',   'FRAMES RX',         '0'),
+            ('drops',    'FRAME DROPS',       '0'),
+            ('total',    'DATASET TOTAL',     '0'),
+            ('last',     'LAST GESTURE',      '—'),
+        ]
+        self._stats_value_labels = {}
+
+        for key, name_text, init_text in rows:
+            row = QHBoxLayout()
+            nl = QLabel(name_text)
+            nl.setMinimumWidth(110)
+            nl.setStyleSheet("color: #5A6A5A; font-size: 11px;")
+            vl = QLabel(init_text)
+            vl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            vl.setMinimumWidth(110)
+            vl.setFont(QFont("Courier New", 11))
+            self._stats_value_labels[key] = vl
+            row.addWidget(nl)
+            row.addWidget(vl)
+            outer.addLayout(row)
+
+        outer.addStretch()
+        return group
+
     # ── Public slots ──────────────────────────────────────────────────────────
 
     def on_frame_ready(self, processed_frame: dict):
@@ -265,6 +299,21 @@ class MainWindow(QMainWindow):
                     f"{processed_frame[hand][ch]:>6.1f}"
                 )
         self._frame_count += 1
+        self._frames_received += 1
+
+    def on_frame_drop(self, dropped: int):
+        self._total_drops += dropped
+
+    def on_sample_saved(self, label: str):
+        self._last_gesture_label = label
+        self._last_gesture_at    = time.monotonic()
+
+    def on_voice_command(self, command: str):
+        # Recorder controls (start/stop/save/discard) are handled by
+        # RecorderPanel.on_voice_command — we only act on tab-navigation words.
+        index = VOICE_TAB_COMMANDS.get(command)
+        if index is not None and 0 <= index < self.tabs.count():
+            self.tabs.setCurrentIndex(index)
 
     def on_status_message(self, message: str):
         self.statusBar().showMessage(message)
@@ -283,12 +332,16 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event):
         # On Ubuntu GNOME + xcb_egl, the title-bar maximize button sometimes
         # triggers WindowFullScreen instead of WindowMaximized. In fullscreen
-        # mode the xcb_egl compositor makes the window invisible. Intercept the
-        # fullscreen state and convert it to maximize, which composites correctly.
+        # mode the xcb_egl compositor makes the window invisible. Clear the
+        # FullScreen bit and force Maximized via setWindowState — a direct bit
+        # transition the WM honors, unlike showMaximized() which goes via
+        # Normal and can be reverted back to FullScreen by the compositor.
+        # super().changeEvent() must always run so Qt's internal state stays
+        # in sync with the WM — never short-circuit with `return`.
         if event.type() == QEvent.WindowStateChange:
             if self.windowState() & Qt.WindowFullScreen:
-                QTimer.singleShot(0, self.showMaximized)
-                return
+                new_state = (self.windowState() & ~Qt.WindowFullScreen) | Qt.WindowMaximized
+                QTimer.singleShot(0, lambda: self.setWindowState(new_state))
         super().changeEvent(event)
 
     def closeEvent(self, event):
@@ -300,3 +353,37 @@ class MainWindow(QMainWindow):
         fps = self._frame_count
         self._frame_count = 0
         self._fps_label.setText(f"RATE: {fps} Hz")
+        self._refresh_session_stats()
+
+    def _refresh_session_stats(self):
+        if not hasattr(self, '_stats_value_labels'):
+            return
+
+        elapsed = int(time.monotonic() - self._session_start)
+        h, rem  = divmod(elapsed, 3600)
+        m, s    = divmod(rem, 60)
+        self._stats_value_labels['uptime'].setText(f"{h:02d}:{m:02d}:{s:02d}")
+
+        self._stats_value_labels['frames'].setText(f"{self._frames_received}")
+        self._stats_value_labels['drops'].setText(f"{self._total_drops}")
+
+        if self._dataset_manager is not None:
+            try:
+                total = sum(self._dataset_manager.all_counts().values())
+            except Exception:
+                total = 0
+            self._stats_value_labels['total'].setText(f"{total}")
+
+        if self._last_gesture_label is None:
+            self._stats_value_labels['last'].setText("—")
+        else:
+            ago = int(time.monotonic() - self._last_gesture_at)
+            if ago < 60:
+                ago_str = f"{ago}s"
+            elif ago < 3600:
+                ago_str = f"{ago // 60}m"
+            else:
+                ago_str = f"{ago // 3600}h"
+            self._stats_value_labels['last'].setText(
+                f"{self._last_gesture_label} {ago_str}"
+            )

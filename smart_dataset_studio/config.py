@@ -53,10 +53,25 @@ GESTURE_LABELS = [
 # Extract so this path points to the folder containing 'am/', 'conf/', etc.
 VOICE_MODEL_PATH = "voice/vosk-model-small-en-us-0.15"
 
-# The four words the voice listener recognises.
-# Fixed vocabulary mode — Vosk only distinguishes these 4 words.
+# Words the voice listener recognises.
+# Fixed vocabulary mode — Vosk only distinguishes these words.
 # Must be lowercase — Vosk returns lowercase text.
-VOICE_COMMANDS = ["start", "stop", "save", "discard"]
+# First four are recorder controls (handled by RecorderPanel.on_voice_command).
+# Remaining six are tab navigation (handled by MainWindow.on_voice_command).
+VOICE_COMMANDS = ["start", "stop", "save", "discard",
+                  "dashboard", "record", "visualize",
+                  "calibration", "dataset", "export"]
+
+# Tab navigation map: spoken word → QTabWidget index.
+# Indices must match the addTab() order in MainWindow._build_ui().
+VOICE_TAB_COMMANDS = {
+    "dashboard":   0,
+    "record":      1,
+    "visualize":   2,
+    "calibration": 3,
+    "dataset":     4,
+    "export":      5,
+}
 
 # Audio sample rate for microphone input.
 # 16000 Hz is the standard for Vosk models — do not change.
@@ -131,3 +146,12 @@ SPEED_TAGS   = ['slow', 'medium', 'fast']
 
 # Default speed used when the user hasn't changed the selector.
 DEFAULT_SPEED = 'medium'
+
+# ── ML Export (Phase 8) ───────────────────────────────────────────────────────
+# Root folder for all ML export packages.
+EXPORT_PATH        = "data/exports/"
+
+# Stratified split ratios — must sum to 1.0.
+EXPORT_TRAIN_RATIO = 0.8
+EXPORT_VAL_RATIO   = 0.1
+EXPORT_TEST_RATIO  = 0.1

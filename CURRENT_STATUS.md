@@ -11,29 +11,32 @@
 #   6.  SmartGlove_Phase4_Documentation.docx             ← Phase 4 deep detail
 #   7.  SmartGlove_Phase5_Documentation.docx             ← Phase 5 deep detail
 #   8.  SmartGlove_Phase6_Documentation.docx             ← Phase 6 deep detail
-#   9.  SmartGlove_Phase7_Documentation.docx             ← Phase 7 deep detail (NEW)
-#   10. config.py                                        ← ALL constants
-#   11. main.py                                          ← entry point
-#   12. serial_thread.py                                 ← serial communication
-#   13. packet_parser.py                                 ← packet validation
-#   14. frame.py                                         ← data structures
-#   15. filter.py                                        ← EMA filter
-#   16. calibration.py                                   ← normalization + profiles
-#   17. processing_thread.py                             ← pipeline thread
-#   18. main_window.py                                   ← tabbed UI
-#   19. calibration_tab.py                               ← inline calibration tab
-#   20. style.py                                         ← dark theme
-#   21. recorder_panel.py                                ← Record tab with speed selector
-#   22. dataset_panel.py                                 ← per-label counts
-#   23. gesture_recorder.py                              ← 60-frame capture state machine
-#   24. dataset_manager.py                               ← profile-based npy save/load
-#   25. dataset_analyzer.py                              ← NEW Phase 7: analysis engine
-#   26. analysis_tab.py                                  ← NEW Phase 7: Dataset tab UI
-#   27. voice_listener.py                                ← Vosk + sounddevice QThread
-#   28. signal_plot.py                                   ← PyQtGraph scrolling graphs
-#   29. hand_skeleton.py                                 ← 3D hand renderer (timer-decoupled)
+#   9.  SmartGlove_Phase7_Documentation.docx             ← Phase 7 deep detail
+#   10. SmartGlove_Phase8_Documentation.docx             ← Phase 8 deep detail (NEW)
+#   11. config.py                                        ← ALL constants
+#   12. main.py                                          ← entry point
+#   13. serial_thread.py                                 ← serial communication
+#   14. packet_parser.py                                 ← packet validation
+#   15. frame.py                                         ← data structures
+#   16. filter.py                                        ← EMA filter
+#   17. calibration.py                                   ← normalization + profiles
+#   18. processing_thread.py                             ← pipeline thread
+#   19. main_window.py                                   ← tabbed UI + session stats
+#   20. calibration_tab.py                               ← inline calibration tab
+#   21. style.py                                         ← dark theme
+#   22. recorder_panel.py                                ← Record tab with speed selector
+#   23. dataset_panel.py                                 ← per-label counts
+#   24. gesture_recorder.py                              ← 60-frame capture state machine
+#   25. dataset_manager.py                               ← profile-based npy save/load
+#   26. dataset_analyzer.py                              ← Phase 7: analysis engine
+#   27. analysis_tab.py                                  ← Phase 7: Dataset tab UI
+#   28. ml_export.py                                     ← NEW Phase 8: ML export worker
+#   29. export_tab.py                                    ← NEW Phase 8: Export tab UI
+#   30. voice_listener.py                                ← Vosk + sounddevice QThread
+#   31. signal_plot.py                                   ← PyQtGraph scrolling graphs
+#   32. hand_skeleton.py                                 ← 3D hand renderer (timer-decoupled)
 #
-# Last updated: Phase 7 Complete — April 2026
+# Last updated: Phase 8 Complete — May 2026
 # ============================================================
 
 ## Project Summary
@@ -41,8 +44,8 @@ Building an AI Sign-to-Speech Smart Glove system. Two gloves with Hall sensors
 and IMU capture hand gestures. A BiLSTM ML model recognizes gestures and
 converts them to text/speech. The system runs fully on embedded hardware (Edge AI).
 
-The current software effort is the Smart Glove Dataset Studio — a Python desktop
-application for recording, managing, and exporting a labeled gesture dataset.
+The Smart Glove Dataset Studio (Python desktop app) is now FEATURE COMPLETE.
+All 8 phases of the studio are done. Next step: dataset collection then Phase 9 training.
 
 ## Team & Environment
 - Developer: Anoop B A (+ teammate)
@@ -54,10 +57,10 @@ application for recording, managing, and exporting a labeled gesture dataset.
 - Master ESP32-S3 port: /dev/ttyACM0 (USB Single Serial) ← verified
 - Slave ESP32 port: /dev/ttyUSB0 (CP2102) ← never connect Python to this
 
-## Hardware Status (Phase 7 Complete)
+## Hardware Status (Phase 8 Complete)
 
 ### Left Hand Glove — Slave (ESP32 DevKit V1)
-- Hall sensors: GPIO 32=Thumb, 33=Index, 34=Middle, 35=Ring, 25=Little
+- Hall sensors: GPIO 32=Thumb, 33=Index, 34=Middle, 35=Ring, 36=Little (GPIO 36 not 25)
 - IMU MPU6050: SDA=GPIO21, SCL=GPIO22, AD0=GND (address 0x68)
 - Communicates via ESP-NOW to master
 - Firmware: firmware/slave_esp32/slave_esp32.ino (FLASHED ✅)
@@ -81,25 +84,26 @@ application for recording, managing, and exporting a labeled gesture dataset.
 BEFORE powering: multimeter resistance mode, 3V3 rail to GND rail.
 Must read > 10kΩ. If < 500Ω → short circuit → chip will burn.
 
-## Folder Structure (Complete — After Phase 7)
+## Folder Structure (Complete — After Phase 8)
 
 ```
 ~/signgloves/
 ├── smart_dataset_studio/
-│   ├── main.py                        ← Phase 7: force env vars, corrected port detection
-│   ├── config.py                      ← Phase 7: SLOW/MEDIUM/FAST_ZONES, SPEED_TAGS added
+│   ├── main.py                        ← Phase 8: voice tab switching wired
+│   ├── config.py                      ← Phase 8: EXPORT_PATH, EXPORT_RATIOS, VOICE_TAB_COMMANDS
 │   ├── requirements.txt
 │   ├── serial_diagnostic.py           ← Phase 7: standalone port measurement tool
 │   │
 │   ├── ui/
 │   │   ├── __init__.py
-│   │   ├── main_window.py             ← Phase 7: changeEvent maximize fix added
+│   │   ├── main_window.py             ← Phase 8: SESSION_STATS, on_voice_command, maximize fix
 │   │   ├── style.py
 │   │   ├── calibration_tab.py
-│   │   ├── calibration_wizard.py      ← fallback only
-│   │   ├── recorder_panel.py          ← Phase 7: speed selector (SLOW/MEDIUM/FAST) added
+│   │   ├── calibration_wizard.py
+│   │   ├── recorder_panel.py          ← Phase 7: speed selector (SLOW/MEDIUM/FAST)
 │   │   ├── dataset_panel.py
-│   │   └── analysis_tab.py            ← NEW Phase 7: complete Dataset tab UI
+│   │   ├── analysis_tab.py            ← Phase 7: Dataset tab + Phase 8: taller plot
+│   │   └── export_tab.py              ← NEW Phase 8: full Export tab UI
 │   │
 │   ├── visualization/
 │   │   ├── __init__.py
@@ -112,8 +116,9 @@ Must read > 10kΩ. If < 500Ω → short circuit → chip will burn.
 │   │
 │   ├── dataset/
 │   │   ├── __init__.py
-│   │   ├── dataset_manager.py         ← Phase 7: profile-based paths, speed tags, npy format
-│   │   └── dataset_analyzer.py        ← NEW Phase 7: analysis engine
+│   │   ├── dataset_manager.py
+│   │   ├── dataset_analyzer.py        ← Phase 7: analysis engine
+│   │   └── ml_export.py               ← NEW Phase 8: MLExportWorker(QThread)
 │   │
 │   ├── voice/
 │   │   ├── __init__.py
@@ -146,7 +151,8 @@ Must read > 10kΩ. If < 500Ω → short circuit → chip will burn.
 │   ├── SmartGlove_Phase4_Documentation.docx
 │   ├── SmartGlove_Phase5_Documentation.docx
 │   ├── SmartGlove_Phase6_Documentation.docx
-│   └── SmartGlove_Phase7_Documentation.docx  ← NEW
+│   ├── SmartGlove_Phase7_Documentation.docx
+│   └── SmartGlove_Phase8_Documentation.docx  ← NEW
 │
 ├── CLAUDE.md                          ← Claude Code project context
 ├── venv/
@@ -161,40 +167,31 @@ smart_dataset_studio/data/
 │   └── <profile_name>/
 │       └── calibration_YYYYMMDD.json
 ├── dataset/
-│   └── <profile_name>/              ← NEW Phase 7: profile-based structure
+│   └── <profile_name>/
 │       ├── HELLO/
 │       │   └── HELLO_medium_001.npy
 │       └── STOP/
 │           └── STOP_fast_001.npy
+├── exports/                           ← NEW Phase 8
+│   ├── X_train.npy                    ← shape (N_train, 60, 16)
+│   ├── X_val.npy                      ← shape (N_val, 60, 16)
+│   ├── X_test.npy                     ← shape (N_test, 60, 16)
+│   ├── y_train.npy                    ← shape (N_train,)
+│   ├── y_val.npy                      ← shape (N_val,)
+│   ├── y_test.npy                     ← shape (N_test,)
+│   ├── label_map.json                 ← {"HELLO":0, "STOP":1, ...}
+│   ├── dataset_flat.csv               ← one row per sample
+│   └── export_report.txt              ← human-readable summary
 └── skeleton_tuning.json
 ```
 
-## config.py Constants (Complete — After Phase 7)
-
-```python
-BAUD_RATE        = 115200
-QUEUE_MAX_SIZE   = 100          # NOT QUEUE_SIZE
-SAMPLE_RATE      = 30
-WINDOW_SIZE      = 60
-FRAME_PERIOD_MS  = 33
-EMA_ALPHA        = 0.25
-FRAME_ID_MAX     = 9999         # max VALUE — modulo = FRAME_ID_MAX + 1 = 10000
-DATASET_PATH     = "data/dataset/"
-CALIBRATION_PATH = "data/calibration/"
-NUM_FEATURES     = 16
-TARGET_SAMPLES   = 50           # NEW Phase 7: green threshold in balance chart
-OUTLIER_Z_THRESHOLD = 2.5       # NEW Phase 7: z-score threshold for outlier detection
-DEFAULT_SPEED    = "medium"     # NEW Phase 7
-SPEED_TAGS       = ["slow", "medium", "fast"]  # NEW Phase 7
-SLOW_ZONES   = {'start': (0, 10),  'transition': (10, 50), 'end': (50, 60)}  # NEW
-MEDIUM_ZONES = {'start': (0, 8),   'transition': (8,  45), 'end': (45, 60)}  # NEW
-FAST_ZONES   = {'start': (0, 5),   'transition': (5,  30), 'end': (30, 60)}  # NEW
-FEATURE_ORDER = ["R_T","R_I","R_M","R_R","R_L","R_P","R_RL","R_Y",
-                 "L_T","L_I","L_M","L_R","L_L","L_P","L_RL","L_Y"]
-FINGER_CHANNELS = ["thumb","index","middle","ring","little"]
-IMU_CHANNELS    = ["pitch","roll","yaw"]
-GESTURE_LABELS  = ['HELLO','STOP','YES','NO','THANKYOU',
-                   'SORRY','HELP','WATER','PLEASE','MORE']
+## Feature Vector (UNCHANGED since Phase 2)
+```
+Position  Feature   Type              Range
+1-5       R_T..R_L  Float normalized  0.0 (open) to 1.0 (bent) — right fingers
+6-8       R_P,R_RL,R_Y  Float degrees -180 to 180 — right wrist IMU
+9-13      L_T..L_L  Float normalized  0.0 to 1.0 — left fingers
+14-16     L_P,L_RL,L_Y  Float degrees -180 to 180 — left wrist IMU
 ```
 
 ## Packet Format (UNCHANGED since Phase 1)
@@ -229,20 +226,23 @@ Field count (19) + "F," prefix is sufficient validation for USB-CDC.
 6. Original chips burned: reversed SS49E sensor — VCC/GND swapped
 
 ### Phase 7
-1. CRITICAL: Checksum gate rejected 70% of valid packets — float rounding mismatch
-   between firmware (uses full internal float) and Python (uses rounded string).
-   Fix: removed verify_checksum() call from parse_packet(). Never add it back.
-2. CRITICAL: hand_skeleton.py rebuilt 40 OpenGL meshes every frame at 30 Hz,
-   blocking Qt main thread ~200ms/call → 5 Hz apparent rate.
+1. CRITICAL: Checksum gate rejected 70% of valid packets — float rounding mismatch.
+   Fix: removed verify_checksum() call. Never add it back.
+2. CRITICAL: hand_skeleton.py rebuilt 40 OpenGL meshes every frame at 30 Hz → 5 Hz.
    Fix: on_frame() only stores values; 25 Hz QTimer drives _update_skeleton().
-   Sphere meshes pre-computed once; per-frame uses vectorized numpy.
-3. os.environ.setdefault() skipped if variable already existed in environment.
-   Fix: changed to os.environ[] (hard assignment, always overwrites).
-4. Auto port detection selected slave (CP2102/ttyUSB0) instead of master
-   (USB Single Serial/ttyACM0). Fix: updated MASTER_PORT_KEYWORDS.
-5. Maximize button made window disappear on Ubuntu GNOME + xcb_egl.
-   Root cause: GNOME sends WindowFullScreen (not WindowMaximized); xcb_egl
-   makes fullscreen invisible. Fix: changeEvent override converts to showMaximized().
+3. os.environ.setdefault() skipped if variable existed. Fix: os.environ[] hard assignment.
+4. Auto port detection selected slave. Fix: updated MASTER_PORT_KEYWORDS.
+5. Maximize button made window disappear on GNOME xcb_egl.
+   Fix: changeEvent override converts WindowFullScreen to showMaximized().
+
+### Phase 8
+1. Window maximize button hidden on Ubuntu 22.04 GNOME (1366x768 screen).
+   Root cause: setMinimumSize(1000, 720) too close to work area (1290x741).
+   GNOME mutter hides maximize when min size ≈ work area size.
+   Fix: setMinimumSize(800, 600) + resize(1200, 720).
+   Rule: setMinimumSize width <= 900, height <= 650 for 1366x768 screens.
+2. Export tab cut off — bottom section not visible.
+   Fix: wrap entire ExportTab content in QScrollArea(widgetResizable=True).
 
 ## Key Design Decisions (All Phases)
 
@@ -260,11 +260,14 @@ Field count (19) + "F," prefix is sufficient validation for USB-CDC.
 | Dataset path | data/dataset/<profile>/ | Profile-based — never flat data/dataset/ |
 | Dataset format | .npy not .csv | Phase 7: changed to numpy binary |
 | Speed tag | Embedded in filename | LABEL_SPEED_NNN.npy |
-| Combined line | Mean of 10 finger channels | IMU in degrees — cannot average with 0-1 bend |
 | Outlier threshold | Z-score > 2.5 | Catches clearly abnormal without over-flagging |
 | Port — master | /dev/ttyACM0 (USB Single Serial) | ESP32-S3 built-in USB-CDC |
 | Port — slave | /dev/ttyUSB0 (CP2102) | Never connect Python to slave |
 | OpenGL env | os.environ[] not setdefault() | Hard assignment always overwrites |
+| Export labels | GESTURE_LABELS index order | NEVER reorder GESTURE_LABELS after collecting data |
+| Export split | Stratified 80/10/10 seed=42 | Proportional per label, reproducible |
+| Voice tabs | Extend VOICE_COMMANDS list | Same VoiceListener, no architecture change |
+| Min window size | 800x600 max | GNOME mutter hides maximize if min ≈ work area |
 
 ## Phase Status
 
@@ -275,64 +278,72 @@ Field count (19) + "F," prefix is sufficient validation for USB-CDC.
 ### Phase 4 ✅ COMPLETE — Gesture Recorder + Dataset Manager + Voice
 ### Phase 5 ✅ COMPLETE — Signal Plots + Tabbed UI + Calibration Tab + Dark Theme
 ### Phase 6 ✅ COMPLETE — Dual Glove ESP-NOW + 3D Hand Skeleton
-
----
-
 ### Phase 7 ✅ COMPLETE — Dataset Analysis Tools + Pipeline Debugging
 
-Hardware: Both gloves working. Frame rate: 30 Hz (verified).
+---
 
-Part A — Pipeline Debugging:
-- Identified and fixed two critical bugs causing 4-10 Hz frame rate
-- Bug 1: packet_parser.py checksum rejecting 70% of valid packets
-- Bug 2: hand_skeleton.py blocking Qt main thread 200ms/frame
-- Used standalone serial_diagnostic.py to prove firmware was perfect
-  and isolate the problem to the Python pipeline
-- Result: 30.2 Hz measured, zero frame drops during recording
+### Phase 8 ✅ COMPLETE — ML Export System
 
-Part B — Dataset Analysis Tools:
-- dataset/dataset_analyzer.py — analysis engine (outliers, stats, overlay)
-- ui/analysis_tab.py — complete Dataset tab (was stub in Phase 6)
-- Speed tagging: SLOW/MEDIUM/FAST selector in Record tab
-- Frame zone constants in config.py for each speed
-- Profile-based dataset storage: data/dataset/<profile_name>/
-- Combined hand overlay: mean of 10 finger channels per sample
-- Vertical zone boundary lines in overlay for selected speed
-- Outlier detection with DELETE button
-- Feature statistics with std dev color coding
+What was built:
+- dataset/ml_export.py — MLExportWorker(QThread)
+  - Scans data/dataset/<profile>/<LABEL>/ for all .npy and legacy .csv files
+  - Loads each sample as (60, 16) numpy array
+  - Stacks into X shape (N, 60, 16), y shape (N,)
+  - Stratified 80/10/10 split (seed=42) → X_train/val/test, y_train/val/test
+  - Saves label_map.json, dataset_flat.csv, export_report.txt
+  - Emits progress_updated, log_message, export_complete, export_failed
+  - Skips malformed files gracefully — never crashes
 
-Additional fixes:
-- Corrected port auto-detection (master=ttyACM0, slave=ttyUSB0)
-- Fixed OpenGL env var (setdefault→hard assignment)
-- Fixed maximize button on Ubuntu GNOME + xcb_egl
-- serial_thread.py: chunk reading with in_waiting
+- ui/export_tab.py — ExportTab(QWidget)
+  - Section 1: Dataset summary (all profiles, per-gesture counts, color coded)
+  - Section 2: Export config (output dir, profile checkboxes, split toggle)
+  - Section 3: Export button + progress bar + color-coded scrolling log
+  - Section 4: Results table (shown after export)
+  - Full QScrollArea wrapping — scrollable on small screens
 
-Completion criteria: ALL PASSED.
-Git commit: "Phase 7 complete: dataset analysis tools + 30Hz pipeline fix"
+- config.py additions:
+  EXPORT_PATH, EXPORT_TRAIN_RATIO, EXPORT_VAL_RATIO, EXPORT_TEST_RATIO
+  VOICE_TAB_COMMANDS, extended VOICE_COMMANDS
+
+- ui/main_window.py changes:
+  - ExportTab wired in place of stub
+  - SESSION_STATS panel on Dashboard (uptime, frames, drops, dataset total, last gesture)
+  - on_voice_command() slot — voice tab switching
+  - setMinimumSize(800, 600) — maximize fix
+
+Additional UI improvements:
+- Voice tab switching: say "dashboard/record/visualize/calibration/dataset/export"
+- Dataset overlay plot taller (40% of tab height)
+- Window maximize fixed on Ubuntu GNOME 1366x768
+
+Verified export output:
+- X_train shape: (17, 60, 16) ✅
+- y_train shape: (17,) ✅
+- y values: {0, 3, 8} = HELLO, NO, PLEASE ✅
+- label_map: HELLO→0 ... MORE→9 ✅
+
+Git commit: "Phase 8 complete: ML export system + session stats + voice tab switching"
 
 ---
 
-### Phase 8 ⬜ NEXT — ML Export System
-Hardware required: Both gloves working ✅
-Status: BLOCKED on dataset collection
+### Phase 9 ⬜ NEXT — BiLSTM Training Pipeline
+BLOCKED on: dataset collection
 
-Before starting Phase 8:
-1. Fix magnet mounts (currently unstable — causes noisy recordings)
-2. Recalibrate with full range (target: finger ranges 200-500+ ADC units)
-3. Record 50+ samples per gesture, all 10 ISL signs
-4. Use Dataset tab to verify quality and delete outliers
-5. All gesture bars should be green (50+) in sample count list
+Before starting Phase 9:
+1. Fix magnet mounts (currently unstable — noisy recordings)
+2. Recalibrate (target: 200-500+ ADC range per finger)
+3. Record 50+ samples per gesture × 10 signs = 500+ total
+4. Use Dataset tab to delete outliers
+5. Click Export → verify X_train shape is (N, 60, 16) with N >= 400
 
-What Phase 8 will build:
-- dataset/ml_export.py
-- Export: X.npy (N,60,16), y.npy (N,), label_map.json, dataset_flat.csv
-- Fills the EXPORT tab (currently a stub)
-
-After Phase 8:
-- Train BiLSTM on PC with TensorFlow/Keras
-- Convert to TFLite INT8
-- Flash to ESP32-S3 N16R8
-- Target: 95%+ accuracy on 10-sign ISL vocabulary
+What Phase 9 will build (standalone PC script, not part of the app):
+- train_bilstm.py
+- BiLSTM model: Input(60,16) → Bidirectional LSTM(64) → Dense(32,relu) → Dense(10,softmax)
+- Training with early stopping, LR scheduling, class weights
+- Confusion matrix and per-gesture accuracy report
+- TFLite conversion + INT8 quantization
+- Model size check (must fit ESP32-S3 N16R8 16MB flash)
+Target: 95%+ accuracy on all 10 ISL signs
 
 ## Instructions for New Claude/Claude Code Sessions
 
@@ -354,7 +365,7 @@ After Phase 8:
 16. update_calibration() is GIL-safe
 17. HandSkeletonWidget._gl_ready must be True before any GL update
 18. ESP32-S3 ADC: use GPIO 1-5 (ADC1 only) — ADC2 conflicts with ESP-NOW
-19. Left hand IMU fields: slave HAS IMU now (added Phase 6)
+19. Left hand IMU fields: slave HAS IMU (added Phase 6)
 20. Master uses UART port (right USB-C on DevKitC-1) = /dev/ttyACM0
 21. Slave MAC: use esp_read_mac() not WiFi.macAddress()
 22. Check 3V3→GND resistance (>10kΩ) before powering any new hardware
@@ -366,3 +377,7 @@ After Phase 8:
 28. NEVER run python3 main.py from Claude Code — always run in separate terminal
 29. Dataset path always data/dataset/<profile_name>/ — never flat
 30. Master port = /dev/ttyACM0 (USB Single Serial), slave = /dev/ttyUSB0 (CP2102)
+31. NEVER reorder GESTURE_LABELS — breaks label mapping in existing exports
+32. Export output always in data/exports/ — delete contents before re-exporting
+33. setMinimumSize max 800x600 — larger values hide maximize on GNOME 1366x768
+34. Voice VOICE_COMMANDS list must include tab names for voice tab switching

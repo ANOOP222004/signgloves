@@ -226,7 +226,10 @@ class AnalysisTab(QWidget):
         self._overlay_plot.setXRange(0, WINDOW_SIZE - 1)
         self._overlay_plot.showGrid(x=False, y=True, alpha=0.3)
         self._overlay_plot.hideButtons()
-        layout.addWidget(self._overlay_plot)
+        # ~40% of a 720-px tall window. Without this the outlier/stats
+        # tables' minimum heights squeeze the splitter below its 3:1:1 share.
+        self._overlay_plot.setMinimumHeight(280)
+        layout.addWidget(self._overlay_plot, stretch=1)
 
         # Speed color legend below the plot
         legend_row = QHBoxLayout()

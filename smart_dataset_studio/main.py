@@ -164,6 +164,9 @@ def main():
     # ── Wire ALL signals BEFORE start() ──────────────────────────────
     processing_thread.frame_ready.connect(window.on_frame_ready)
     processing_thread.status_message.connect(window.on_status_message)
+    processing_thread.frame_drop_detected.connect(window.on_frame_drop)
+    recorder_panel.sample_saved.connect(window.on_sample_saved)
+    voice_listener.command_detected.connect(window.on_voice_command)
 
     processing_thread.frame_ready.connect(recorder.on_frame)
     processing_thread.frame_drop_detected.connect(recorder.on_frame_drop)
