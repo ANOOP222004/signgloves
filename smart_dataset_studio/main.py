@@ -49,6 +49,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
+# Voice subsystem at INFO so its lifecycle events are visible in the terminal
+# (started / stopped / "command detected: …"). Without this the global WARNING
+# threshold hides everything and there's no way to tell whether the listener
+# is even running, let alone what it's hearing.
+logging.getLogger("voice.voice_listener").setLevel(logging.INFO)
+
 # ── Master port detection ─────────────────────────────────────
 # Verified by diagnostic script:
 #   /dev/ttyACM0 → "USB Single Serial"  = ESP32-S3 master ✓
@@ -167,6 +173,7 @@ def main():
     processing_thread.frame_drop_detected.connect(window.on_frame_drop)
     recorder_panel.sample_saved.connect(window.on_sample_saved)
     voice_listener.command_detected.connect(window.on_voice_command)
+    voice_listener.command_detected.connect(window.calibration_tab.on_voice_command)
 
     processing_thread.frame_ready.connect(recorder.on_frame)
     processing_thread.frame_drop_detected.connect(recorder.on_frame_drop)

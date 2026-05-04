@@ -58,9 +58,13 @@ VOICE_MODEL_PATH = "voice/vosk-model-small-en-us-0.15"
 # Must be lowercase — Vosk returns lowercase text.
 # First four are recorder controls (handled by RecorderPanel.on_voice_command).
 # Remaining six are tab navigation (handled by MainWindow.on_voice_command).
+# All entries MUST be single words — Vosk fixed-grammar mode silently
+# fails to build the recogniser if any entry contains whitespace, which
+# breaks every other command too (the whole recogniser stops emitting).
 VOICE_COMMANDS = ["start", "stop", "save", "discard",
                   "dashboard", "record", "visualize",
-                  "calibration", "dataset", "export"]
+                  "calibration", "dataset", "export",
+                  "open", "closed", "calibrate"]
 
 # Tab navigation map: spoken word → QTabWidget index.
 # Indices must match the addTab() order in MainWindow._build_ui().

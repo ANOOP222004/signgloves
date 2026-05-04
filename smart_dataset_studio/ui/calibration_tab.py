@@ -429,6 +429,16 @@ class CalibrationTab(QWidget):
             self._reset_capture_state()
             self._set_banner_uncalibrated()
 
+    # ── Voice command public slot ─────────────────────────────────────
+
+    def on_voice_command(self, command: str):
+        if command == "open":
+            self._on_capture_open()
+        elif command == "closed":
+            self._on_capture_closed()
+        elif command == "calibrate":
+            self._on_save()
+
     # ── Raw frame intake ──────────────────────────────────────────────
 
     def on_raw_frame(self, raw_frame: dict):

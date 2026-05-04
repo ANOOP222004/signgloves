@@ -175,7 +175,17 @@ class VoiceListener(QThread):
                     # incomplete and unreliable for command detection.
                     if recogniser.AcceptWaveform(bytes(audio_block)):
                         result = json.loads(recogniser.Result())
+                        logger.info(f"Vosk final result: {result}")
                         self._handle_result(result)
+                    else:
+                        # Log partial results — lets you watch in the terminal
+                        # what Vosk is hearing while you speak. Empty partial
+                        # = mic working but no voice / silence. Words appearing
+                        # but not in VOICE_COMMANDS = mic + recogniser fine,
+                        # but the spoken word doesn't match the grammar.
+                        partial = json.loads(recogniser.PartialResult()).get("partial", "").strip()
+                        if partial:
+                            logger.info(f"Vosk partial: {partial!r}")
 
         except sd.PortAudioError as e:
             msg = (

@@ -37,7 +37,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QComboBox,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont
 
 from recording.gesture_recorder import GestureRecorder
@@ -108,6 +108,13 @@ class RecorderPanel(QGroupBox):
 
         self._build_ui()
         self._set_state_idle()
+
+        # Auto-start the voice listener so the user doesn't have to remember
+        # to click 🎤 every session. QTimer.singleShot(0, ...) defers the
+        # toggle until the event loop's first tick — by then main.py has
+        # finished wiring command_detected to the recorder panel, the main
+        # window (tab nav) and the calibration tab.
+        QTimer.singleShot(0, self._on_voice_toggle)
 
         # Record button starts disabled — CalibrationTab enables it
         # after calibration_updated is emitted.
