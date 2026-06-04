@@ -43,8 +43,8 @@ IMU_CHANNELS    = ['pitch', 'roll', 'yaw']
 # Used by RecorderPanel (dropdown) and DatasetPanel (display list).
 # To add a sign: append to this list only — nothing else needs changing.
 GESTURE_LABELS = [
-    'HELLO', 'STOP', 'YES', 'NO', 'THANKYOU',
-    'SORRY', 'HELP', 'WATER', 'PLEASE', 'MORE',
+    'HELLO', 'STUDY', 'YES', 'NO', 'THANKYOU',
+    'SORRY', 'HELP', 'WATER', 'PLEASE', 'FRIENDS'
 ]
 
 # --- Voice Commands ---
