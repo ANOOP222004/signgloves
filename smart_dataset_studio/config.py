@@ -63,7 +63,7 @@ VOICE_MODEL_PATH = "voice/vosk-model-small-en-us-0.15"
 # breaks every other command too (the whole recogniser stops emitting).
 VOICE_COMMANDS = ["start", "stop", "save", "discard",
                   "dashboard", "record", "visualize",
-                  "calibration", "dataset", "export",
+                  "calibration", "dataset", "export", "predict",
                   "open", "closed", "calibrate"]
 
 # Tab navigation map: spoken word → QTabWidget index.
@@ -75,6 +75,7 @@ VOICE_TAB_COMMANDS = {
     "calibration": 3,
     "dataset":     4,
     "export":      5,
+    "predict":     6,
 }
 
 # Audio sample rate for microphone input.

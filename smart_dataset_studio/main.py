@@ -49,19 +49,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
-# Voice subsystem at INFO so its lifecycle events are visible in the terminal
-# (started / stopped / "command detected: …"). Without this the global WARNING
-# threshold hides everything and there's no way to tell whether the listener
-# is even running, let alone what it's hearing.
-logging.getLogger("voice.voice_listener").setLevel(logging.INFO)
-
-# ── Master port detection ─────────────────────────────────────
-# Verified by diagnostic script:
-#   /dev/ttyACM0 → "USB Single Serial"  = ESP32-S3 master ✓
-#   /dev/ttyUSB0 → "CP2102..."           = ESP32 DevKit V1 slave
-MASTER_PORT_KEYWORDS = ["usb single serial", "usb serial", "cdc"]
-
-
 def select_port() -> str:
     all_ports = list(serial.tools.list_ports.comports())
 
@@ -70,36 +57,10 @@ def select_port() -> str:
         print("Check that the ESP32-S3 master is connected via USB.")
         sys.exit(1)
 
-    print("\nAll available serial ports:")
-    for p in all_ports:
-        print(f"  {p.device:<20} — {p.description}")
-
-    master_ports = [
-        p for p in all_ports
-        if any(kw in p.description.lower() for kw in MASTER_PORT_KEYWORDS)
-    ]
-
-    if len(master_ports) == 1:
-        chosen = master_ports[0]
-        print(f"\n✓ Auto-selected master port: {chosen.device}  ({chosen.description})")
-        return chosen.device
-
-    if len(master_ports) > 1:
-        print(f"\nMultiple master-candidate ports — select the ESP32-S3:")
-        for i, p in enumerate(master_ports):
-            print(f"  [{i}] {p.device:<20} — {p.description}")
-        while True:
-            try:
-                choice = int(input("Select: "))
-                if 0 <= choice < len(master_ports):
-                    return master_ports[choice].device
-            except (ValueError, KeyboardInterrupt):
-                pass
-            print("Invalid choice, try again.")
-
-    print("\n[WARNING] Could not auto-detect master port.")
+    print("\nAvailable serial ports:")
     for i, p in enumerate(all_ports):
         print(f"  [{i}] {p.device:<20} — {p.description}")
+
     while True:
         try:
             choice = int(input("\nSelect port number: "))
@@ -173,7 +134,6 @@ def main():
     processing_thread.frame_drop_detected.connect(window.on_frame_drop)
     recorder_panel.sample_saved.connect(window.on_sample_saved)
     voice_listener.command_detected.connect(window.on_voice_command)
-    voice_listener.command_detected.connect(window.calibration_tab.on_voice_command)
 
     processing_thread.frame_ready.connect(recorder.on_frame)
     processing_thread.frame_drop_detected.connect(recorder.on_frame_drop)
@@ -192,6 +152,7 @@ def main():
     recorder.progress_updated.connect(window.plot_widget.on_recording_progress)
 
     processing_thread.frame_ready.connect(window.skeleton_widget.on_frame)
+    processing_thread.frame_ready.connect(window.prediction_tab.on_frame_ready)
 
     processing_thread.raw_frame_ready.connect(window.calibration_tab.on_raw_frame)
     window.calibration_tab.calibration_updated.connect(

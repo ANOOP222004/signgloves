@@ -23,6 +23,7 @@ from ui.dataset_panel import DatasetPanel
 from ui.calibration_tab import CalibrationTab
 from ui.analysis_tab import AnalysisTab
 from ui.export_tab import ExportTab
+from ui.prediction_tab import PredictionTab
 from ui.style import bend_color
 from visualization.signal_plot import SignalPlotWidget
 from visualization.hand_skeleton import HandSkeletonWidget
@@ -145,6 +146,10 @@ class MainWindow(QMainWindow):
         else:
             self.export_tab = None
             tabs.addTab(self._build_stub("EXPORT", "dataset_manager not provided"), "🚀  EXPORT")
+
+        # Tab 6 — Live Prediction (Phase 10)
+        self.prediction_tab = PredictionTab()
+        tabs.addTab(self.prediction_tab, "🤖  PREDICT")
 
         root.addWidget(tabs)
 
