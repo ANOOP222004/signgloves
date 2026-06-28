@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 data/
 smart_dataset_studio/voice/vosk-model-small-en-us-0.15/
+CLAUDE.md
+CURRENT_STATUS.md
+HARDWARE_EXPANSION.md
+.venv/
